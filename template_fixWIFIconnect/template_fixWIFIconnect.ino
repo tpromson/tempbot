@@ -27,9 +27,9 @@ OneWire oneWire(SENSOR_PIN);
 DallasTemperature sensors(&oneWire);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-char webAppUrl[150] = "xxx";
+char webAppUrl[150] = "";
 char timerDelayStr[10] = "30";
-char lineToken[55] = "";
+char lineToken[64] = "";
 char minTempAlert[10] = "20.0";
 char maxTempAlert[10] = "35.0";
 unsigned long lastTime = 0;
@@ -166,11 +166,19 @@ void sendData() {
     return;
   }
 
+  // ตรวจสอบว่ามี URL ตั้งค่าไว้แล้วก่อนส่ง
+  if (strlen(webAppUrl) < 10) {
+    currentStatus = "NO URL";
+    Serial.println("sendData: webAppUrl is not set.");
+    return;
+  }
+
   sensors.requestTemperatures(); 
   delay(750); // รอ DS18B20 แปลงค่าความละเอียด 12-bit
   
   float t = sensors.getTempCByIndex(0);
-  if (t == DEVICE_DISCONNECTED_C || t == 85.0) {
+  // ใช้ช่วง valid range ของ DS18B20 (-55 ถึง 125°C) แทนการตรวจ 85.0 แบบ exact
+  if (t == DEVICE_DISCONNECTED_C || t < -55.0 || t > 125.0) {
     currentStatus = "SENS ERR";
     failedSyncCount++;
     if (failedSyncCount >= 10) {
@@ -181,6 +189,9 @@ void sendData() {
     }
     return;
   }
+
+  // อัปเดตค่าปัจจุบันทันทีหลังอ่านเซนเซอร์สำเร็จ
+  currentTemp = t;
 
   WiFiClientSecure client;
   HTTPClient http;
@@ -220,6 +231,22 @@ void sendData() {
   }
 }
 
+String urlEncode(String str) {
+  String encoded = "";
+  char buf[4];
+  for (unsigned int i = 0; i < str.length(); i++) {
+    char c = str.charAt(i);
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+        c == '-' || c == '_' || c == '.' || c == '~') {
+      encoded += c;
+    } else {
+      sprintf(buf, "%%%02X", (unsigned char)c);
+      encoded += buf;
+    }
+  }
+  return encoded;
+}
+
 void sendLineNotify(String message) {
   if (lineToken[0] == '\0') return; // ข้ามถ้าไม่มี Token
   
@@ -231,7 +258,7 @@ void sendLineNotify(String message) {
     http.addHeader("Authorization", "Bearer " + String(lineToken));
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
     
-    String postData = "message=" + message;
+    String postData = "message=" + urlEncode(message); // URL encode ก่อนส่ง
     int httpCode = http.POST(postData);
     if (httpCode == 200) {
       Serial.println("LINE Notify: Sent successfully.");
@@ -322,8 +349,15 @@ void setup() {
         size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
-        if (fileSize >= 235) {
+        if (fileSize >= 244) {
+          // รูปแบบใหม่: lineToken ขนาด 64 bytes
           configFile.readBytes(lineToken, sizeof(lineToken));
+          configFile.readBytes(minTempAlert, sizeof(minTempAlert));
+          configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
+        } else if (fileSize >= 235) {
+          // รูปแบบเก่า: lineToken ขนาด 55 bytes (รองรับการอัปเกรด)
+          configFile.readBytes(lineToken, 55);
+          lineToken[54] = '\0';
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
         } else {
@@ -369,7 +403,7 @@ void setup() {
   // เพิ่มช่องกรอกค่าปรับแต่ง (Custom Parameters)
   WiFiManagerParameter custom_url("url", "Google WebApp URL", webAppUrl, 150);
   WiFiManagerParameter custom_delay("delay", "Sync Delay (Minutes)", timerDelayStr, 10);
-  WiFiManagerParameter custom_token("token", "LINE Notify Token", lineToken, 55);
+  WiFiManagerParameter custom_token("token", "LINE Notify Token", lineToken, 64);
   WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
   
@@ -488,8 +522,9 @@ void loop() {
       playCatAnimation(1, "SENDING DATA"); 
       sendData();
       playCatAnimation(1, "DONE!");
+      lastTime = currentMillis; // รีเซ็ตเฉพาะเมื่อ WiFi ต่ออยู่และส่งได้
     }
-    lastTime = currentMillis;
+    // ถ้า WiFi ยังไม่ต่อ จะ loop กลับมาลองส่งใหม่ทันทีในรอบถัดไป
   }
 
   // 2. ขยับตำแหน่งหน้าจอเพื่อป้องกันจอเบิร์น (ทุก 1 นาที)
@@ -516,10 +551,8 @@ void loop() {
       sensors.requestTemperatures(); // ส่งคำสั่งให้เซนเซอร์เริ่มคำนวณอุณหภูมิ (ใช้เวลา ~750ms บอร์ดไม่ควรรอค้าง)
       conversionStartTime = currentMillis;
       isConversionRequestIssued = true;
-    }
-    
-    // เมื่อเวลาผ่านไปเกิน 750ms นับจากสั่งคำนวณ ให้ดึงค่ามาแสดงผล
-    if (isConversionRequestIssued && (currentMillis - conversionStartTime >= 750)) {
+    } else if (currentMillis - conversionStartTime >= 750) {
+      // เมื่อเวลาผ่านไปเกิน 750ms นับจากสั่งคำนวณ ให้ดึงค่ามาแสดงผล
       currentTemp = sensors.getTempCByIndex(0);
       
       // ถ้าเชื่อมต่อ WiFi ได้ปกติ แต่อยู่ในช่วงพักรอส่งข้อมูล ให้คงสถานะ SYNCED หรือ CONNECTED ไว้
