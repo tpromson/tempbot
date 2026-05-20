@@ -2,6 +2,7 @@
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <WiFiManager.h>
+#include <LittleFS.h>
 #include <DHT.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -25,9 +26,10 @@
 DHT dht(SENSOR_PIN, DHTTYPE);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-String webAppUrl = "xxx";
+char webAppUrl[150] = "xxx";
+char timerDelayStr[10] = "30";
 unsigned long lastTime = 0;
-unsigned long timerDelay = 1800000; // 30 นาที
+unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 
 String currentStatus = "STARTING";
 float currentTemp = -999;
@@ -146,7 +148,7 @@ void sendData() {
   boardID.toUpperCase();
   
   // ส่งค่าทั้งอุณหภูมิและความชื้นจริงที่วัดได้ไปยัง Google Sheets
-  String url = webAppUrl + "?temperature=" + String(t, 1) + "&humidity=" + String(h, 1) + "&board_id=" + boardID;
+  String url = String(webAppUrl) + "?temperature=" + String(t, 1) + "&humidity=" + String(h, 1) + "&board_id=" + boardID;
   
   if (http.begin(client, url)) {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -184,6 +186,29 @@ void setup() {
   WiFi.setAutoConnect(true);
   WiFi.setAutoReconnect(true);
 
+  // 1. อ่านค่าพารามิเตอร์จาก LittleFS
+  if (LittleFS.begin()) {
+    Serial.println("LittleFS mounted successfully.");
+    if (LittleFS.exists("/config.bin")) {
+      File configFile = LittleFS.open("/config.bin", "r");
+      if (configFile) {
+        configFile.readBytes(webAppUrl, sizeof(webAppUrl));
+        configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
+        configFile.close();
+        Serial.println("Config loaded from LittleFS:");
+        Serial.print("URL: "); Serial.println(webAppUrl);
+        Serial.print("Delay: "); Serial.println(timerDelayStr);
+      }
+    }
+  } else {
+    Serial.println("Failed to mount LittleFS.");
+  }
+
+  unsigned long delayMin = atol(timerDelayStr);
+  if (delayMin > 0) {
+    timerDelay = delayMin * 60000;
+  }
+
   dht.begin();
   
   Wire.begin(4, 5); 
@@ -198,6 +223,12 @@ void setup() {
   playCatAnimation(1, "BOOTING...");
 
   WiFiManager wm;
+
+  // เพิ่มช่องกรอกค่าปรับแต่ง (Custom Parameters)
+  WiFiManagerParameter custom_url("url", "Google WebApp URL", webAppUrl, 150);
+  WiFiManagerParameter custom_delay("delay", "Sync Delay (Minutes)", timerDelayStr, 10);
+  wm.addParameter(&custom_url);
+  wm.addParameter(&custom_delay);
   
   // ตั้งค่า Config ของ WiFiManager ให้เหมาะกับการจัดการตอนไฟตก
   wm.setConfigPortalTimeout(120); // ถ้าผ่านไป 2 นาทีไม่มีคนมาต่อ AP เพื่อตั้งค่า ให้หลุดจาก setup ไปทำ loop ต่อ (สำคัญมากตอนไฟดับแล้วเราไม่อยู่บ้าน)
@@ -215,6 +246,26 @@ void setup() {
   } else {
     playCatAnimation(1, "WIFI OK!");
     currentStatus = "CONNECTED";
+  }
+
+  // ดึงค่าใหม่และบันทึกลงใน LittleFS
+  if (custom_url.getValue()[0] != '\0') {
+    strncpy(webAppUrl, custom_url.getValue(), sizeof(webAppUrl));
+  }
+  if (custom_delay.getValue()[0] != '\0') {
+    strncpy(timerDelayStr, custom_delay.getValue(), sizeof(timerDelayStr));
+    unsigned long delayMin = atol(timerDelayStr);
+    if (delayMin > 0) {
+      timerDelay = delayMin * 60000;
+    }
+  }
+
+  File configFile = LittleFS.open("/config.bin", "w");
+  if (configFile) {
+    configFile.write((uint8_t*)webAppUrl, sizeof(webAppUrl));
+    configFile.write((uint8_t*)timerDelayStr, sizeof(timerDelayStr));
+    configFile.close();
+    Serial.println("Config saved to LittleFS.");
   }
 
   ArduinoOTA.setHostname(boardID.c_str());
