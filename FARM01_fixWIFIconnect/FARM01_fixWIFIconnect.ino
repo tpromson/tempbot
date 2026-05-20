@@ -26,7 +26,7 @@ OneWire oneWire(SENSOR_PIN);
 DallasTemperature sensors(&oneWire);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-String webAppUrl = "https://script.google.com/macros/s/AKfycbxP9ItR-dSp_mmQSZaXOJXY3NSm3THfRlf0owGKGMcune2YQCi4kmqexS1vfcOLKE9oqw/exec";
+String webAppUrl = "xxx";
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที
 
