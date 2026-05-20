@@ -30,6 +30,7 @@ char webAppUrl[150] = "xxx";
 char timerDelayStr[10] = "30";
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
+int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
 
 String currentStatus = "STARTING";
 float currentTemp = -999;
@@ -128,6 +129,13 @@ void sendData() {
   // ตรวจสอบ WiFi ก่อนส่งทุกครั้ง ถ้าไม่ต่อให้ข้ามไปก่อน
   if (WiFi.status() != WL_CONNECTED) {
     currentStatus = "NO WIFI";
+    failedSyncCount++;
+    if (failedSyncCount >= 10) {
+      Serial.println("Watchdog: Sync failed 10 times consecutively. Rebooting...");
+      playCatAnimation(2, "WATCHDOG REBOOT");
+      delay(1000);
+      ESP.restart();
+    }
     return;
   }
 
@@ -137,6 +145,13 @@ void sendData() {
   
   if (isnan(t) || isnan(h)) {
     currentStatus = "SENS ERR";
+    failedSyncCount++;
+    if (failedSyncCount >= 10) {
+      Serial.println("Watchdog: Sync failed 10 times consecutively. Rebooting...");
+      playCatAnimation(2, "WATCHDOG REBOOT");
+      delay(1000);
+      ESP.restart();
+    }
     return;
   }
 
@@ -150,12 +165,32 @@ void sendData() {
   // ส่งค่าทั้งอุณหภูมิและความชื้นจริงที่วัดได้ไปยัง Google Sheets
   String url = String(webAppUrl) + "?temperature=" + String(t, 1) + "&humidity=" + String(h, 1) + "&board_id=" + boardID;
   
+  bool syncSuccess = false;
   if (http.begin(client, url)) {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.setTimeout(10000); 
     int httpCode = http.GET();
-    currentStatus = (httpCode == 200) ? "SYNCED" : "ERR " + String(httpCode);
+    if (httpCode == 200) {
+      currentStatus = "SYNCED";
+      failedSyncCount = 0; // รีเซ็ตตัวนับเมื่อสำเร็จ
+      syncSuccess = true;
+    } else {
+      currentStatus = "ERR " + String(httpCode);
+    }
     http.end();
+  } else {
+    currentStatus = "ERR HTTP_BEGIN";
+  }
+
+  if (!syncSuccess) {
+    failedSyncCount++;
+    Serial.print("Watchdog: Failed sync count = "); Serial.println(failedSyncCount);
+    if (failedSyncCount >= 10) {
+      Serial.println("Watchdog: Sync failed 10 times consecutively. Rebooting...");
+      playCatAnimation(2, "WATCHDOG REBOOT");
+      delay(1000);
+      ESP.restart();
+    }
   }
 }
 
@@ -182,6 +217,8 @@ void checkWiFiConnection() {
 void setup() {
   Serial.begin(115200);
   
+  pinMode(0, INPUT_PULLUP); // ตั้งค่าขาปุ่ม Flash สำหรับ Factory Reset (GPIO 0)
+
   // สั่งตั้งค่า WiFi Mode ให้เป็นแบบพยายามต่ออัตโนมัติเมื่อหลุด
   WiFi.setAutoConnect(true);
   WiFi.setAutoReconnect(true);
@@ -281,6 +318,47 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
   
+  // ตรวจสอบการกดปุ่ม Flash (GPIO 0) ค้างไว้ 5 วินาทีเพื่อ Reset Settings
+  static unsigned long flashPressStartTime = 0;
+  if (digitalRead(0) == LOW) {
+    if (flashPressStartTime == 0) {
+      flashPressStartTime = millis();
+    }
+    unsigned long holdTime = millis() - flashPressStartTime;
+    if (holdTime >= 5000) {
+      playCatAnimation(2, "FACTORY RESET");
+      WiFiManager wm;
+      wm.resetSettings();
+      if (LittleFS.begin()) {
+        LittleFS.remove("/config.bin");
+      }
+      Serial.println("Settings and LittleFS config reset! Rebooting...");
+      delay(1000);
+      ESP.restart();
+    } else {
+      // แสดงตัวนับถอยหลัง 5..1 วินาที
+      int countdown = 5 - (holdTime / 1000);
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setTextColor(WHITE);
+      display.setCursor(5, 10);
+      display.println("KEEP PRESSING FLASH");
+      display.setCursor(20, 24);
+      display.println("TO FACTORY RESET");
+      display.setTextSize(3);
+      display.setCursor(55, 40);
+      display.print(countdown);
+      display.display();
+      delay(50);
+      return; // ข้ามการทำงานรอบปกติของ loop ขณะกดปุ่ม
+    }
+  } else {
+    if (flashPressStartTime != 0) {
+      flashPressStartTime = 0;
+      updateDisplay(currentTemp, currentHumid, currentStatus); // คืนค่าหน้าจอปกติทันทีเมื่อปล่อยปุ่ม (มี 3 พารามิเตอร์)
+    }
+  }
+
   // ตรวจสอบสถานะ WiFi สม่ำเสมอ
   checkWiFiConnection();
 
