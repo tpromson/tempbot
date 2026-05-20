@@ -330,7 +330,67 @@ void checkWiFiConnection() {
   }
 }
 
-// --- 6. Setup ---
+// --- 6. Config Portal (กดปุ่ม Flash สั้น) ---
+void openConfigPortal() {
+  currentStatus = "CONFIG MODE";
+  updateDisplay(currentTemp, currentStatus);
+  playCatAnimation(1, "CONFIG MODE");
+
+  WiFiManager wm;
+
+  // โหลดค่าปัจจุบันมาแสดงในฟอร์ม ผู้ใช้แก้ไขเฉพาะส่วนที่ต้องการ
+  WiFiManagerParameter custom_url("url", "Google WebApp URL", webAppUrl, 150);
+  WiFiManagerParameter custom_delay("delay", "Sync Delay (Minutes)", timerDelayStr, 10);
+  WiFiManagerParameter custom_token("token", "LINE Notify Token", lineToken, 64);
+  WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
+  WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
+
+  wm.addParameter(&custom_url);
+  wm.addParameter(&custom_delay);
+  wm.addParameter(&custom_token);
+  wm.addParameter(&custom_min_temp);
+  wm.addParameter(&custom_max_temp);
+
+  wm.setConfigPortalTimeout(120); // ปิด portal อัตโนมัติใน 2 นาที
+
+  String boardID = "ESP8266_" + String(ESP.getChipId(), HEX);
+  boardID.toUpperCase();
+
+  Serial.println("Opening Config Portal (no WiFi reset)...");
+  // startConfigPortal เปิดหน้า config โดยไม่ล้าง WiFi credentials เดิม
+  wm.startConfigPortal(boardID.c_str());
+
+  // บันทึกค่าที่ผู้ใช้กรอกใหม่
+  if (custom_url.getValue()[0] != '\0') {
+    strncpy(webAppUrl, custom_url.getValue(), sizeof(webAppUrl));
+  }
+  if (custom_delay.getValue()[0] != '\0') {
+    strncpy(timerDelayStr, custom_delay.getValue(), sizeof(timerDelayStr));
+    unsigned long delayMin = atol(timerDelayStr);
+    if (delayMin > 0) timerDelay = delayMin * 60000;
+  }
+  strncpy(lineToken, custom_token.getValue(), sizeof(lineToken));
+  strncpy(minTempAlert, custom_min_temp.getValue(), sizeof(minTempAlert));
+  strncpy(maxTempAlert, custom_max_temp.getValue(), sizeof(maxTempAlert));
+
+  // บันทึกลง LittleFS
+  File configFile = LittleFS.open("/config.bin", "w");
+  if (configFile) {
+    configFile.write((uint8_t*)webAppUrl, sizeof(webAppUrl));
+    configFile.write((uint8_t*)timerDelayStr, sizeof(timerDelayStr));
+    configFile.write((uint8_t*)lineToken, sizeof(lineToken));
+    configFile.write((uint8_t*)minTempAlert, sizeof(minTempAlert));
+    configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
+    configFile.close();
+    Serial.println("Config saved after portal.");
+  }
+
+  playCatAnimation(1, "RESTARTING...");
+  delay(500);
+  ESP.restart();
+}
+
+// --- 7. Setup ---
 void setup() {
   Serial.begin(115200);
   
@@ -470,44 +530,77 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
   
-  // ตรวจสอบการกดปุ่ม Flash (GPIO 0) ค้างไว้ 5 วินาทีเพื่อ Reset Settings
+  // ตรวจสอบการกดปุ่ม Flash (GPIO 0)
+  // กดแล้วปล่อยภายใน 2 วินาที → เปิด Config Portal (ไม่ล้าง WiFi)
+  // กดค้างไว้ 5 วินาที          → Factory Reset (ลบทุกอย่าง)
   static unsigned long flashPressStartTime = 0;
+  static bool flashActionTaken = false;
+
   if (digitalRead(0) == LOW) {
     if (flashPressStartTime == 0) {
       flashPressStartTime = millis();
+      flashActionTaken = false;
     }
     unsigned long holdTime = millis() - flashPressStartTime;
-    if (holdTime >= 5000) {
+
+    if (holdTime >= 5000 && !flashActionTaken) {
+      // ค้างครบ 5 วินาที → Factory Reset
+      flashActionTaken = true;
       playCatAnimation(2, "FACTORY RESET");
       WiFiManager wm;
       wm.resetSettings();
       if (LittleFS.begin()) {
         LittleFS.remove("/config.bin");
       }
-      Serial.println("Settings and LittleFS config reset! Rebooting...");
+      Serial.println("Factory reset! Rebooting...");
       delay(1000);
       ESP.restart();
-    } else {
-      // แสดงตัวนับถอยหลัง 5..1 วินาที
-      int countdown = 5 - (holdTime / 1000);
+    } else if (holdTime >= 2000) {
+      // ค้าง 2-5 วินาที → แสดงนับถอยหลัง Factory Reset
+      int countdown = 5 - (int)(holdTime / 1000);
+      if (countdown < 1) countdown = 1;
       display.clearDisplay();
       display.setTextSize(1);
       display.setTextColor(WHITE);
-      display.setCursor(5, 10);
-      display.println("KEEP PRESSING FLASH");
-      display.setCursor(20, 24);
-      display.println("TO FACTORY RESET");
+      display.setCursor(5, 5);
+      display.println("KEEP HOLDING:");
+      display.setCursor(5, 17);
+      display.println("FACTORY RESET IN...");
       display.setTextSize(3);
-      display.setCursor(55, 40);
+      display.setCursor(55, 35);
       display.print(countdown);
       display.display();
       delay(50);
-      return; // ข้ามการทำงานรอบปกติของ loop ขณะกดปุ่ม
+      return;
+    } else {
+      // กดค้างไว้ < 2 วินาที → แสดงคำแนะนำ
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setTextColor(WHITE);
+      display.setCursor(2, 5);
+      display.println("RELEASE = CONFIG");
+      display.setCursor(2, 17);
+      display.println("HOLD 5s  = RESET");
+      display.drawFastHLine(0, 28, 128, WHITE);
+      display.setTextSize(2);
+      display.setCursor(10, 38);
+      display.print("CONFIG?");
+      display.display();
+      delay(50);
+      return;
     }
   } else {
     if (flashPressStartTime != 0) {
+      unsigned long holdTime = millis() - flashPressStartTime;
+      bool wasShortPress = (holdTime < 2000 && !flashActionTaken);
       flashPressStartTime = 0;
-      updateDisplay(currentTemp, currentStatus); // คืนค่าหน้าจอปกติทันทีเมื่อปล่อยปุ่ม
+      flashActionTaken = false;
+      if (wasShortPress) {
+        // ปล่อยปุ่มก่อน 2 วินาที → เปิด Config Portal
+        openConfigPortal();
+      } else {
+        updateDisplay(currentTemp, currentStatus);
+      }
     }
   }
 
