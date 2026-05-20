@@ -86,6 +86,33 @@ void playCatAnimation(int repetitions, String message) {
   }
 }
 
+void drawWiFiIcon(int x, int y) {
+  if (WiFi.status() != WL_CONNECTED) {
+    // Draw crossed lines to indicate offline
+    display.drawLine(x, y, x + 10, y + 8, WHITE);
+    display.drawLine(x + 10, y, x, y + 8, WHITE);
+    return;
+  }
+
+  int32_t rssi = WiFi.RSSI();
+  int bars = 0;
+  if (rssi >= -55)      bars = 4;
+  else if (rssi >= -70) bars = 3;
+  else if (rssi >= -85) bars = 2;
+  else if (rssi > -100) bars = 1;
+
+  for (int i = 0; i < 4; i++) {
+    int barHeight = (i + 1) * 2;
+    int barX = x + (i * 3);
+    int barY = y + 8 - barHeight;
+    if (i < bars) {
+      display.fillRect(barX, barY, 2, barHeight, WHITE);
+    } else {
+      display.drawRect(barX, barY, 2, barHeight, WHITE);
+    }
+  }
+}
+
 void updateDisplay(float temp, float humid, String status) {
   display.clearDisplay();
   
@@ -94,7 +121,10 @@ void updateDisplay(float temp, float humid, String status) {
   display.setTextColor(WHITE);
   display.setCursor(shiftX, shiftY);
   display.print("STATUS: "); 
-  display.println(status);
+  display.print(status);
+  
+  drawWiFiIcon(115 + shiftX, shiftY);
+  
   display.drawFastHLine(0, 10 + shiftY, 128, WHITE);
 
   if (temp > -100 && humid >= 0) {
