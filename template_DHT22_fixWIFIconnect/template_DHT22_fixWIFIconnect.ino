@@ -20,7 +20,7 @@
 #define FRAME_DELAY 42
 #define FRAME_WIDTH 64
 #define FRAME_HEIGHT 64
-#define FRAME_COUNT 22 
+#define FRAME_COUNT 25
 
 // --- 2. Objects ---
 DHT dht(SENSOR_PIN, DHTTYPE);
