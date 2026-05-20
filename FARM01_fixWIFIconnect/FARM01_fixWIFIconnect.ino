@@ -35,6 +35,9 @@ float currentTemp = -999;
 bool isConversionRequestIssued = false;
 unsigned long conversionStartTime = 0;
 
+int8_t shiftX = 0;
+int8_t shiftY = 0;
+
 // --- 3. Bitmap Data ( Angry Cat ) ---
 // (Move to bitmaps.h for better project organization)
 
@@ -88,20 +91,20 @@ void updateDisplay(float temp, String status) {
   
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0, 0);
+  display.setCursor(shiftX, shiftY);
   display.print("STATUS: "); 
   display.println(status);
-  display.drawFastHLine(0, 10, 128, WHITE);
+  display.drawFastHLine(0, 10 + shiftY, 128, WHITE);
 
   if (temp != DEVICE_DISCONNECTED_C && temp > -50) {
     display.setTextSize(4);
-    display.setCursor(5, 20);
+    display.setCursor(5 + shiftX, 20 + shiftY);
     display.print(temp, 1);
     display.setTextSize(2);
     display.print(" C");
   } else {
     display.setTextSize(2);
-    display.setCursor(10, 30);
+    display.setCursor(10 + shiftX, 30 + shiftY);
     display.print("SENSOR ERR");
   }
   display.display();
@@ -180,6 +183,7 @@ void setup() {
     for(;;);
   }
   
+  display.dim(true); // เปิดโหมดประหยัดหน้าจอ (Dim Screen) ยืดอายุหน้าจอ OLED
   display.clearDisplay();
   playCatAnimation(1, "BOOTING...");
 
@@ -231,7 +235,23 @@ void loop() {
     lastTime = currentMillis;
   }
 
-  // 2. อ่านค่าเซนเซอร์แบบ Non-blocking และอัปเดตหน้าจอ (ทุก 2 วินาที)
+  // 2. ขยับตำแหน่งหน้าจอเพื่อป้องกันจอเบิร์น (ทุก 1 นาที)
+  static unsigned long lastShiftTime = 0;
+  if (currentMillis - lastShiftTime >= 60000) {
+    static int shiftState = 0;
+    shiftState = (shiftState + 1) % 5;
+    switch (shiftState) {
+      case 0: shiftX = 0;  shiftY = 0;  break;
+      case 1: shiftX = 1;  shiftY = 1;  break;
+      case 2: shiftX = -1; shiftY = -1; break;
+      case 3: shiftX = 2;  shiftY = -1; break;
+      case 4: shiftX = -2; shiftY = 1;  break;
+    }
+    updateDisplay(currentTemp, currentStatus);
+    lastShiftTime = currentMillis;
+  }
+
+  // 3. อ่านค่าเซนเซอร์แบบ Non-blocking และอัปเดตหน้าจอ (ทุก 2 วินาที)
   static unsigned long lastUpdate = 0;
   if (currentMillis - lastUpdate >= 2000) {
     
