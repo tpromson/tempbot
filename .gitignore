@@ -2,3 +2,4 @@
 *.hex
 /build
 /.pio
+.DS_Store

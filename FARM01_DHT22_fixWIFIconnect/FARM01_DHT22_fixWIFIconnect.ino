@@ -2,8 +2,7 @@
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <WiFiManager.h>
-#include <OneWire.h>
-#include <DallasTemperature.h>
+#include <DHT.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -11,7 +10,8 @@
 #include "bitmaps.h"
 
 // --- 1. Configuration ---
-#define SENSOR_PIN 14        // ขา D5 (สำหรับ DS18B20)
+#define SENSOR_PIN 14        // ขา D5 (สำหรับ DHT22)
+#define DHTTYPE DHT22        // ชนิดเซนเซอร์ DHT22 (AM2302)
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define SCREEN_I2C_ADDR 0x3C 
@@ -22,8 +22,7 @@
 #define FRAME_COUNT 22 
 
 // --- 2. Objects ---
-OneWire oneWire(SENSOR_PIN);
-DallasTemperature sensors(&oneWire);
+DHT dht(SENSOR_PIN, DHTTYPE);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 String webAppUrl = "https://script.google.com/macros/s/AKfycbxP9ItR-dSp_mmQSZaXOJXY3NSm3THfRlf0owGKGMcune2YQCi4kmqexS1vfcOLKE9oqw/exec";
@@ -32,14 +31,9 @@ unsigned long timerDelay = 1800000; // 30 นาที
 
 String currentStatus = "STARTING";
 float currentTemp = -999;
-bool isConversionRequestIssued = false;
-unsigned long conversionStartTime = 0;
+float currentHumid = -999;
 
-// --- 3. Bitmap Data ( Angry Cat ) ---
-// (Move to bitmaps.h for better project organization)
-
-
-// --- 4. Display Functions ---
+// --- 3. Display Functions ---
 
 void showOnDisplay(String title, String msg, float temp = -999) {
   display.clearDisplay();
@@ -53,12 +47,8 @@ void showOnDisplay(String title, String msg, float temp = -999) {
   if (temp != -999) {
     display.setTextSize(2);
     display.setCursor(0, 38);
-    if (temp == DEVICE_DISCONNECTED_C) {
-      display.print("ERR");
-    } else {
-      display.print(temp, 1);
-      display.print(" C");
-    }
+    display.print(temp, 1);
+    display.print(" C");
   }
   display.display();
 }
@@ -83,9 +73,10 @@ void playCatAnimation(int repetitions, String message) {
   }
 }
 
-void updateDisplay(float temp, String status) {
+void updateDisplay(float temp, float humid, String status) {
   display.clearDisplay();
   
+  // แถบแสดงสถานะด้านบน
   display.setTextSize(1);
   display.setTextColor(WHITE);
   display.setCursor(0, 0);
@@ -93,12 +84,31 @@ void updateDisplay(float temp, String status) {
   display.println(status);
   display.drawFastHLine(0, 10, 128, WHITE);
 
-  if (temp != DEVICE_DISCONNECTED_C && temp > -50) {
-    display.setTextSize(4);
-    display.setCursor(5, 20);
-    display.print(temp, 1);
+  if (temp > -100 && humid >= 0) {
+    // วาดเส้นแบ่งครึ่งหน้าจอแนวตั้ง
+    display.drawFastVLine(64, 10, 54, WHITE);
+    
+    // คอลัมน์ซ้าย: แสดงอุณหภูมิ (Temperature)
+    display.setTextSize(1);
+    display.setCursor(5, 16);
+    display.print("TEMP");
+    
     display.setTextSize(2);
+    display.setCursor(5, 32);
+    display.print(temp, 1);
+    display.setTextSize(1);
     display.print(" C");
+    
+    // คอลัมน์ขวา: แสดงความชื้น (Humidity)
+    display.setTextSize(1);
+    display.setCursor(72, 16);
+    display.print("HUMID");
+    
+    display.setTextSize(2);
+    display.setCursor(72, 32);
+    display.print(humid, 1);
+    display.setTextSize(1);
+    display.print(" %");
   } else {
     display.setTextSize(2);
     display.setCursor(10, 30);
@@ -107,7 +117,7 @@ void updateDisplay(float temp, String status) {
   display.display();
 }
 
-// --- 5. Logic Functions ---
+// --- 4. Logic Functions ---
 
 void sendData() {
   // ตรวจสอบ WiFi ก่อนส่งทุกครั้ง ถ้าไม่ต่อให้ข้ามไปก่อน
@@ -116,11 +126,11 @@ void sendData() {
     return;
   }
 
-  sensors.requestTemperatures(); 
-  delay(750); // รอ DS18B20 แปลงค่าความละเอียด 12-bit
+  // อ่านค่าจากเซนเซอร์ DHT22
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
   
-  float t = sensors.getTempCByIndex(0);
-  if (t == DEVICE_DISCONNECTED_C || t == 85.0) {
+  if (isnan(t) || isnan(h)) {
     currentStatus = "SENS ERR";
     return;
   }
@@ -132,7 +142,8 @@ void sendData() {
   String boardID = "BOARD_" + String(ESP.getChipId(), HEX);
   boardID.toUpperCase();
   
-  String url = webAppUrl + "?temperature=" + String(t, 1) + "&humidity=0&board_id=" + boardID;
+  // ส่งค่าทั้งอุณหภูมิและความชื้นจริงที่วัดได้ไปยัง Google Sheets
+  String url = webAppUrl + "?temperature=" + String(t, 1) + "&humidity=" + String(h, 1) + "&board_id=" + boardID;
   
   if (http.begin(client, url)) {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -162,7 +173,7 @@ void checkWiFiConnection() {
   }
 }
 
-// --- 6. Setup ---
+// --- 5. Setup ---
 void setup() {
   Serial.begin(115200);
   
@@ -170,8 +181,7 @@ void setup() {
   WiFi.setAutoConnect(true);
   WiFi.setAutoReconnect(true);
 
-  sensors.begin();
-  sensors.setWaitForConversion(false); // ปิดการบล็อก เพื่อใช้เทคนิค Non-blocking ใน loop()
+  dht.begin();
   
   Wire.begin(4, 5); 
   
@@ -212,7 +222,7 @@ void setup() {
   lastTime = millis();
 }
 
-// --- 7. Loop ---
+// --- 6. Loop ---
 void loop() {
   ArduinoOTA.handle();
   
@@ -235,24 +245,24 @@ void loop() {
   static unsigned long lastUpdate = 0;
   if (currentMillis - lastUpdate >= 2000) {
     
-    if (!isConversionRequestIssued) {
-      sensors.requestTemperatures(); // ส่งคำสั่งให้เซนเซอร์เริ่มคำนวณอุณหภูมิ (ใช้เวลา ~750ms บอร์ดไม่ควรรอค้าง)
-      conversionStartTime = currentMillis;
-      isConversionRequestIssued = true;
+    // ดึงค่าอุณหภูมิและความชื้นจากเซนเซอร์ DHT22
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    
+    if (isnan(t) || isnan(h)) {
+      currentTemp = -999;
+      currentHumid = -999;
+    } else {
+      currentTemp = t;
+      currentHumid = h;
     }
     
-    // เมื่อเวลาผ่านไปเกิน 750ms นับจากสั่งคำนวณ ให้ดึงค่ามาแสดงผล
-    if (isConversionRequestIssued && (currentMillis - conversionStartTime >= 750)) {
-      currentTemp = sensors.getTempCByIndex(0);
-      
-      // ถ้าเชื่อมต่อ WiFi ได้ปกติ แต่อยู่ในช่วงพักรอส่งข้อมูล ให้คงสถานะ SYNCED หรือ CONNECTED ไว้
-      if (WiFi.status() == WL_CONNECTED && currentStatus == "RECONNECTING") {
-        currentStatus = "CONNECTED";
-      }
-      
-      updateDisplay(currentTemp, currentStatus);
-      isConversionRequestIssued = false; // รีเซ็ตสถานะเพื่อรอรอบถัดไป
-      lastUpdate = currentMillis;
+    // ถ้าเชื่อมต่อ WiFi ได้ปกติ แต่อยู่ในช่วงพักรอส่งข้อมูล ให้คงสถานะ SYNCED หรือ CONNECTED ไว้
+    if (WiFi.status() == WL_CONNECTED && currentStatus == "RECONNECTING") {
+      currentStatus = "CONNECTED";
     }
+    
+    updateDisplay(currentTemp, currentHumid, currentStatus);
+    lastUpdate = currentMillis;
   }
 }
