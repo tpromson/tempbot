@@ -28,9 +28,16 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 char webAppUrl[150] = "xxx";
 char timerDelayStr[10] = "30";
+char lineToken[55] = "";
+char minTempAlert[10] = "20.0";
+char maxTempAlert[10] = "35.0";
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
+
+enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
+AlertState lastAlertState = STATE_NORMAL;
+unsigned long lastLineNotifyTime = 0;
 
 String currentStatus = "STARTING";
 float currentTemp = -999;
@@ -194,6 +201,70 @@ void sendData() {
   }
 }
 
+void sendLineNotify(String message) {
+  if (lineToken[0] == '\0') return; // ข้ามถ้าไม่มี Token
+  
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  
+  if (http.begin(client, "https://notify-api.line.me/api/notify")) {
+    http.addHeader("Authorization", "Bearer " + String(lineToken));
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    
+    String postData = "message=" + message;
+    int httpCode = http.POST(postData);
+    if (httpCode == 200) {
+      Serial.println("LINE Notify: Sent successfully.");
+    } else {
+      Serial.print("LINE Notify: Failed with code "); Serial.println(httpCode);
+    }
+    http.end();
+  } else {
+    Serial.println("LINE Notify: Failed to connect.");
+  }
+}
+
+void checkLineAlerts(float temp) {
+  if (lineToken[0] == '\0') return; // ข้ามหากไม่ได้กรอก Line Token
+
+  float minT = atof(minTempAlert);
+  float maxT = atof(maxTempAlert);
+  unsigned long currentMillis = millis();
+  
+  String boardID = "BOARD_" + String(ESP.getChipId(), HEX);
+  boardID.toUpperCase();
+
+  AlertState newState = STATE_NORMAL;
+  if (temp < minT && temp > -50) {
+    newState = STATE_ALERT_LOW;
+  } else if (temp > maxT) {
+    newState = STATE_ALERT_HIGH;
+  }
+
+  // ส่งแจ้งเตือนเมื่อเกิดการเปลี่ยนสถานะ หรือถ้ายืนระยะอยู่ในสถานะแจ้งเตือนเดิมเกิน 30 นาที ให้ส่งซ้ำ
+  if (newState != lastAlertState || 
+      (newState != STATE_NORMAL && (currentMillis - lastLineNotifyTime >= 1800000))) {
+    
+    String message = "";
+    if (newState == STATE_ALERT_LOW) {
+      message = "\n⚠️ [ALERT] Low Temp!\nTemp: " + String(temp, 1) + " C\nMin Limit: " + String(minT, 1) + " C\nBoard: " + boardID;
+    } else if (newState == STATE_ALERT_HIGH) {
+      message = "\n⚠️ [ALERT] High Temp!\nTemp: " + String(temp, 1) + " C\nMax Limit: " + String(maxT, 1) + " C\nBoard: " + boardID;
+    } else if (newState == STATE_NORMAL && lastAlertState != STATE_NORMAL) {
+      message = "\n✅ [RESOLVED] Temp returned to normal.\nTemp: " + String(temp, 1) + " C\nRange: " + String(minT, 1) + " - " + String(maxT, 1) + " C\nBoard: " + boardID;
+    }
+
+    if (message != "") {
+      Serial.print("LINE Alert triggering. State change from ");
+      Serial.print(lastAlertState); Serial.print(" to "); Serial.println(newState);
+      sendLineNotify(message);
+      lastLineNotifyTime = currentMillis;
+    }
+    lastAlertState = newState;
+  }
+}
+
 // ฟังก์ชันคอยตรวจเช็คและต่อ WiFi ใหม่แบบอัตโนมัติ (ไม่บล็อกลูป)
 void checkWiFiConnection() {
   static unsigned long lastWiFiCheck = 0;
@@ -229,12 +300,26 @@ void setup() {
     if (LittleFS.exists("/config.bin")) {
       File configFile = LittleFS.open("/config.bin", "r");
       if (configFile) {
+        size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
+        if (fileSize >= 235) {
+          configFile.readBytes(lineToken, sizeof(lineToken));
+          configFile.readBytes(minTempAlert, sizeof(minTempAlert));
+          configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
+        } else {
+          // ค่าเริ่มต้นสำหรับการแจ้งเตือนหากอัปเกรดมาจากรุ่นเก่า
+          lineToken[0] = '\0';
+          strcpy(minTempAlert, "20.0");
+          strcpy(maxTempAlert, "35.0");
+        }
         configFile.close();
         Serial.println("Config loaded from LittleFS:");
         Serial.print("URL: "); Serial.println(webAppUrl);
         Serial.print("Delay: "); Serial.println(timerDelayStr);
+        Serial.print("LINE Token: "); Serial.println(lineToken);
+        Serial.print("Min Alert: "); Serial.println(minTempAlert);
+        Serial.print("Max Alert: "); Serial.println(maxTempAlert);
       }
     }
   } else {
@@ -264,8 +349,15 @@ void setup() {
   // เพิ่มช่องกรอกค่าปรับแต่ง (Custom Parameters)
   WiFiManagerParameter custom_url("url", "Google WebApp URL", webAppUrl, 150);
   WiFiManagerParameter custom_delay("delay", "Sync Delay (Minutes)", timerDelayStr, 10);
+  WiFiManagerParameter custom_token("token", "LINE Notify Token", lineToken, 55);
+  WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
+  WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
+  
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
+  wm.addParameter(&custom_token);
+  wm.addParameter(&custom_min_temp);
+  wm.addParameter(&custom_max_temp);
   
   // ตั้งค่า Config ของ WiFiManager ให้เหมาะกับการจัดการตอนไฟตก
   wm.setConfigPortalTimeout(120); // ถ้าผ่านไป 2 นาทีไม่มีคนมาต่อ AP เพื่อตั้งค่า ให้หลุดจาก setup ไปทำ loop ต่อ (สำคัญมากตอนไฟดับแล้วเราไม่อยู่บ้าน)
@@ -296,11 +388,17 @@ void setup() {
       timerDelay = delayMin * 60000;
     }
   }
+  strncpy(lineToken, custom_token.getValue(), sizeof(lineToken));
+  strncpy(minTempAlert, custom_min_temp.getValue(), sizeof(minTempAlert));
+  strncpy(maxTempAlert, custom_max_temp.getValue(), sizeof(maxTempAlert));
 
   File configFile = LittleFS.open("/config.bin", "w");
   if (configFile) {
     configFile.write((uint8_t*)webAppUrl, sizeof(webAppUrl));
     configFile.write((uint8_t*)timerDelayStr, sizeof(timerDelayStr));
+    configFile.write((uint8_t*)lineToken, sizeof(lineToken));
+    configFile.write((uint8_t*)minTempAlert, sizeof(minTempAlert));
+    configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
     configFile.close();
     Serial.println("Config saved to LittleFS.");
   }
@@ -412,6 +510,12 @@ void loop() {
     }
     
     updateDisplay(currentTemp, currentHumid, currentStatus);
+    
+    // ตรวจสอบสถานะและแจ้งเตือน Line Notify
+    if (currentTemp > -50 && currentTemp != -999) {
+      checkLineAlerts(currentTemp);
+    }
+    
     lastUpdate = currentMillis;
   }
 }
