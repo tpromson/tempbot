@@ -425,6 +425,10 @@ void sendLineNotify(String message) {
     String body = "{\"to\":\"" + String(lineGroupId) + "\","
                   "\"messages\":[{\"type\":\"text\",\"text\":\"" + safeMsg + "\"}]}";
 
+    Serial.print("LINE API Token Len: "); Serial.println(strlen(lineToken));
+    Serial.print("LINE API Group ID:  "); Serial.println(lineGroupId);
+    Serial.print("LINE API Payload:   "); Serial.println(body);
+
     int httpCode = http.POST(body);
     if (httpCode == 200) {
       Serial.println("LINE API: Message sent successfully.");
