@@ -564,11 +564,20 @@ void checkLineAlerts(float temp, float humid) {
   String boardID = getBoardIdentifier();
 
   // 1. ตรวจสอบอุณหภูมิ
+  float hysteresisT = 0.5;
   AlertState newState = STATE_NORMAL;
-  if (temp < minT && temp > -50) {
+  if (temp <= minT && temp > -50) {
     newState = STATE_ALERT_LOW;
-  } else if (temp > maxT) {
+  } else if (temp >= maxT) {
     newState = STATE_ALERT_HIGH;
+  } else {
+    if (lastAlertState == STATE_ALERT_LOW && temp < minT + hysteresisT) {
+      newState = STATE_ALERT_LOW;
+    } else if (lastAlertState == STATE_ALERT_HIGH && temp > maxT - hysteresisT) {
+      newState = STATE_ALERT_HIGH;
+    } else {
+      newState = STATE_NORMAL;
+    }
   }
 
   if (newState != lastAlertState || 
@@ -593,11 +602,20 @@ void checkLineAlerts(float temp, float humid) {
   }
 
   // 2. ตรวจสอบความชื้น
+  float hysteresisH = 2.0;
   AlertState newHumidState = STATE_NORMAL;
-  if (humid < minH && humid >= 0) {
+  if (humid <= minH && humid >= 0) {
     newHumidState = STATE_ALERT_LOW;
-  } else if (humid > maxH) {
+  } else if (humid >= maxH) {
     newHumidState = STATE_ALERT_HIGH;
+  } else {
+    if (lastHumidAlertState == STATE_ALERT_LOW && humid < minH + hysteresisH) {
+      newHumidState = STATE_ALERT_LOW;
+    } else if (lastHumidAlertState == STATE_ALERT_HIGH && humid > maxH - hysteresisH) {
+      newHumidState = STATE_ALERT_HIGH;
+    } else {
+      newHumidState = STATE_NORMAL;
+    }
   }
 
   if (newHumidState != lastHumidAlertState || 

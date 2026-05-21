@@ -533,11 +533,20 @@ void checkLineAlerts(float temp) {
   
   String boardID = getBoardIdentifier();
 
+  float hysteresisT = 0.5;
   AlertState newState = STATE_NORMAL;
-  if (temp < minT && temp > -50) {
+  if (temp <= minT && temp > -50) {
     newState = STATE_ALERT_LOW;
-  } else if (temp > maxT) {
+  } else if (temp >= maxT) {
     newState = STATE_ALERT_HIGH;
+  } else {
+    if (lastAlertState == STATE_ALERT_LOW && temp < minT + hysteresisT) {
+      newState = STATE_ALERT_LOW;
+    } else if (lastAlertState == STATE_ALERT_HIGH && temp > maxT - hysteresisT) {
+      newState = STATE_ALERT_HIGH;
+    } else {
+      newState = STATE_NORMAL;
+    }
   }
 
   // ส่งแจ้งเตือนเมื่อเกิดการเปลี่ยนสถานะ หรือถ้ายืนระยะอยู่ในสถานะแจ้งเตือนเดิมเกิน 30 นาที ให้ส่งซ้ำ
