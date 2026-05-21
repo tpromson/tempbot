@@ -124,7 +124,7 @@ function handleTextMessage(event) {
 
   var response = "";
 
-  if (["temp", "อุณหภูมิ", "ล่าสุด", "last", "now"].indexOf(text) !== -1) {
+  if (["temp", "อุณหภูมิ", "ล่าสุด", "last", "now", "humid", "ความชื้น"].indexOf(text) !== -1) {
     // ข้อมูลล่าสุด (บอร์ดเดียว)
     response = getLatestEntry();
 
@@ -135,8 +135,8 @@ function handleTextMessage(event) {
   } else if (["help", "ช่วยเหลือ", "คำสั่ง", "?"].indexOf(text) !== -1) {
     response = "📋 TempBot คำสั่งที่ใช้ได้\n"
              + "─────────────────\n"
-             + "• temp / อุณหภูมิ / ล่าสุด\n"
-             + "  → ข้อมูลอุณหภูมิล่าสุด\n\n"
+             + "• temp / อุณหภูมิ / ความชื้น / ล่าสุด\n"
+             + "  → ข้อมูลอุณหภูมิและความชื้นล่าสุด\n\n"
              + "• status / สถานะ / ทั้งหมด\n"
              + "  → สรุปทุกบอร์ด\n\n"
              + "• help / ช่วยเหลือ\n"
