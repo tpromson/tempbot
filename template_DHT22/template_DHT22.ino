@@ -420,6 +420,8 @@ void sendLineNotify(String message) {
     String safeMsg = message;
     safeMsg.replace("\\", "\\\\");
     safeMsg.replace("\"", "\\\"");
+    safeMsg.replace("\n", "\\n");
+    safeMsg.replace("\r", "\\r");
     String body = "{\"to\":\"" + String(lineGroupId) + "\","
                   "\"messages\":[{\"type\":\"text\",\"text\":\"" + safeMsg + "\"}]}";
 

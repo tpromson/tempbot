@@ -15,7 +15,7 @@
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DS18B20)
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define SCREEN_I2C_ADDR 0x3C 
+#define SCREEN_I2C_ADDR 0x3D 
 
 #define FRAME_DELAY 42
 #define FRAME_WIDTH 64
@@ -407,6 +407,8 @@ void sendLineNotify(String message) {
     String safeMsg = message;
     safeMsg.replace("\\", "\\\\");
     safeMsg.replace("\"", "\\\"");
+    safeMsg.replace("\n", "\\n");
+    safeMsg.replace("\r", "\\r");
     String body = "{\"to\":\"" + String(lineGroupId) + "\","
                   "\"messages\":[{\"type\":\"text\",\"text\":\"" + safeMsg + "\"}]}";
 
