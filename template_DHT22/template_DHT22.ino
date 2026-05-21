@@ -407,7 +407,12 @@ String urlEncode(String str) {
 }
 
 void sendLineNotify(String message) {
-  if (lineToken[0] == '\0' || lineGroupId[0] == '\0') return;
+  String tokenStr = String(lineToken);
+  tokenStr.trim();
+  String groupIdStr = String(lineGroupId);
+  groupIdStr.trim();
+
+  if (tokenStr.length() == 0 || groupIdStr.length() == 0) return;
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -415,18 +420,18 @@ void sendLineNotify(String message) {
 
   if (http.begin(client, "https://api.line.me/v2/bot/message/push")) {
     http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", "Bearer " + String(lineToken));
+    http.addHeader("Authorization", "Bearer " + tokenStr);
 
     String safeMsg = message;
     safeMsg.replace("\\", "\\\\");
     safeMsg.replace("\"", "\\\"");
     safeMsg.replace("\n", "\\n");
     safeMsg.replace("\r", "\\r");
-    String body = "{\"to\":\"" + String(lineGroupId) + "\","
+    String body = "{\"to\":\"" + groupIdStr + "\","
                   "\"messages\":[{\"type\":\"text\",\"text\":\"" + safeMsg + "\"}]}";
 
-    Serial.print("LINE API Token Len: "); Serial.println(strlen(lineToken));
-    Serial.print("LINE API Group ID:  "); Serial.println(lineGroupId);
+    Serial.print("LINE API Token Len: "); Serial.println(tokenStr.length());
+    Serial.print("LINE API Group ID:  "); Serial.println(groupIdStr);
     Serial.print("LINE API Payload:   "); Serial.println(body);
 
     int httpCode = http.POST(body);
