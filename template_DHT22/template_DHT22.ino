@@ -257,7 +257,7 @@ void updateDisplay(float temp, float humid, String status) {
     display.setTextSize(1);
     display.setCursor(5 + shiftX, 56 + shiftY);
     
-    bool showIP = ((millis() / 4000) % 2 == 0);
+    bool showIP = ((millis() / 10000) % 2 == 0);
     time_t now = time(nullptr);
     if (showIP || now < 1000000000) {
       display.print("IP: ");
