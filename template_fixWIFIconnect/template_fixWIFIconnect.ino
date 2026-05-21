@@ -33,7 +33,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 char webAppUrl[150] = "";
 char timerDelayStr[10] = "30";
-char lineToken[64] = "";
+char lineToken[200]  = "";   // LINE Messaging API Channel Access Token
+char lineGroupId[40] = "";   // LINE Group ID (เช่น C1234abcd...)
 char minTempAlert[10] = "20.0";
 char maxTempAlert[10] = "35.0";
 unsigned long lastTime = 0;
@@ -373,31 +374,37 @@ String urlEncode(String str) {
 }
 
 void sendLineNotify(String message) {
-  if (lineToken[0] == '\0') return; // ข้ามถ้าไม่มี Token
-  
+  if (lineToken[0] == '\0' || lineGroupId[0] == '\0') return;
+
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  
-  if (http.begin(client, "https://notify-api.line.me/api/notify")) {
+
+  if (http.begin(client, "https://api.line.me/v2/bot/message/push")) {
+    http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", "Bearer " + String(lineToken));
-    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-    
-    String postData = "message=" + urlEncode(message); // URL encode ก่อนส่ง
-    int httpCode = http.POST(postData);
+
+    // สร้าง JSON body (escape " และ \ ในข้อความ)
+    String safeMsg = message;
+    safeMsg.replace("\\", "\\\\");
+    safeMsg.replace("\"", "\\\"");
+    String body = "{\"to\":\"" + String(lineGroupId) + "\","
+                  "\"messages\":[{\"type\":\"text\",\"text\":\"" + safeMsg + "\"}]}";
+
+    int httpCode = http.POST(body);
     if (httpCode == 200) {
-      Serial.println("LINE Notify: Sent successfully.");
+      Serial.println("LINE API: Message sent successfully.");
     } else {
-      Serial.print("LINE Notify: Failed with code "); Serial.println(httpCode);
+      Serial.print("LINE API: Failed, code "); Serial.println(httpCode);
     }
     http.end();
   } else {
-    Serial.println("LINE Notify: Failed to connect.");
+    Serial.println("LINE API: Failed to connect.");
   }
 }
 
 void checkLineAlerts(float temp) {
-  if (lineToken[0] == '\0') return; // ข้ามหากไม่ได้กรอก Line Token
+  if (lineToken[0] == '\0' || lineGroupId[0] == '\0') return;
 
   float minT = atof(minTempAlert);
   float maxT = atof(maxTempAlert);
@@ -466,13 +473,15 @@ void openConfigPortal() {
   // โหลดค่าปัจจุบันมาแสดงในฟอร์ม ผู้ใช้แก้ไขเฉพาะส่วนที่ต้องการ
   WiFiManagerParameter custom_url("url", "Google WebApp URL", webAppUrl, 150);
   WiFiManagerParameter custom_delay("delay", "Sync Delay (Minutes)", timerDelayStr, 10);
-  WiFiManagerParameter custom_token("token", "LINE Notify Token", lineToken, 64);
+  WiFiManagerParameter custom_token("token", "LINE Channel Access Token", lineToken, 200);
+  WiFiManagerParameter custom_groupid("groupid", "LINE Group ID (Cxxxxxxx)", lineGroupId, 40);
   WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
 
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
   wm.addParameter(&custom_token);
+  wm.addParameter(&custom_groupid);
   wm.addParameter(&custom_min_temp);
   wm.addParameter(&custom_max_temp);
 
@@ -495,6 +504,7 @@ void openConfigPortal() {
     if (delayMin > 0) timerDelay = delayMin * 60000;
   }
   strncpy(lineToken, custom_token.getValue(), sizeof(lineToken));
+  strncpy(lineGroupId, custom_groupid.getValue(), sizeof(lineGroupId));
   strncpy(minTempAlert, custom_min_temp.getValue(), sizeof(minTempAlert));
   strncpy(maxTempAlert, custom_max_temp.getValue(), sizeof(maxTempAlert));
 
@@ -506,6 +516,7 @@ void openConfigPortal() {
     configFile.write((uint8_t*)lineToken, sizeof(lineToken));
     configFile.write((uint8_t*)minTempAlert, sizeof(minTempAlert));
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
+    configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
     configFile.close();
     Serial.println("Config saved after portal.");
   }
@@ -534,20 +545,29 @@ void setup() {
         size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
-        if (fileSize >= 244) {
-          // รูปแบบใหม่: lineToken ขนาด 64 bytes
+        if (fileSize >= 420) {
+          // รูปแบบใหม่: lineToken 200 bytes + lineGroupId 40 bytes
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
+          configFile.readBytes(lineGroupId, sizeof(lineGroupId));
+        } else if (fileSize >= 244) {
+          // รูปแบบกลาง: lineToken 64 bytes (LINE Notify เดิม)
+          configFile.readBytes(lineToken, 64);
+          lineToken[63] = '\0';
+          configFile.readBytes(minTempAlert, sizeof(minTempAlert));
+          configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
+          lineGroupId[0] = '\0'; // ยังไม่มี group id
         } else if (fileSize >= 235) {
-          // รูปแบบเก่า: lineToken ขนาด 55 bytes (รองรับการอัปเกรด)
+          // รูปแบบเก่า: lineToken 55 bytes
           configFile.readBytes(lineToken, 55);
           lineToken[54] = '\0';
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
+          lineGroupId[0] = '\0';
         } else {
-          // ค่าเริ่มต้นสำหรับการแจ้งเตือนหากอัปเกรดมาจากรุ่นเก่า
           lineToken[0] = '\0';
+          lineGroupId[0] = '\0';
           strcpy(minTempAlert, "20.0");
           strcpy(maxTempAlert, "35.0");
         }
@@ -555,7 +575,8 @@ void setup() {
         Serial.println("Config loaded from LittleFS:");
         Serial.print("URL: "); Serial.println(webAppUrl);
         Serial.print("Delay: "); Serial.println(timerDelayStr);
-        Serial.print("LINE Token: "); Serial.println(lineToken);
+        Serial.print("LINE Token: "); Serial.println(lineToken[0] ? "[set]" : "[empty]");
+        Serial.print("LINE Group: "); Serial.println(lineGroupId);
         Serial.print("Min Alert: "); Serial.println(minTempAlert);
         Serial.print("Max Alert: "); Serial.println(maxTempAlert);
       }
@@ -588,13 +609,15 @@ void setup() {
   // เพิ่มช่องกรอกค่าปรับแต่ง (Custom Parameters)
   WiFiManagerParameter custom_url("url", "Google WebApp URL", webAppUrl, 150);
   WiFiManagerParameter custom_delay("delay", "Sync Delay (Minutes)", timerDelayStr, 10);
-  WiFiManagerParameter custom_token("token", "LINE Notify Token", lineToken, 64);
+  WiFiManagerParameter custom_token("token", "LINE Channel Access Token", lineToken, 200);
+  WiFiManagerParameter custom_groupid("groupid", "LINE Group ID (Cxxxxxxx)", lineGroupId, 40);
   WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
   wm.addParameter(&custom_token);
+  wm.addParameter(&custom_groupid);
   wm.addParameter(&custom_min_temp);
   wm.addParameter(&custom_max_temp);
   
@@ -628,6 +651,7 @@ void setup() {
     }
   }
   strncpy(lineToken, custom_token.getValue(), sizeof(lineToken));
+  strncpy(lineGroupId, custom_groupid.getValue(), sizeof(lineGroupId));
   strncpy(minTempAlert, custom_min_temp.getValue(), sizeof(minTempAlert));
   strncpy(maxTempAlert, custom_max_temp.getValue(), sizeof(maxTempAlert));
 
@@ -638,6 +662,7 @@ void setup() {
     configFile.write((uint8_t*)lineToken, sizeof(lineToken));
     configFile.write((uint8_t*)minTempAlert, sizeof(minTempAlert));
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
+    configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
     configFile.close();
     Serial.println("Config saved to LittleFS.");
   }
