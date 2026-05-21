@@ -36,6 +36,7 @@ char lineToken[200]  = "";   // LINE Messaging API Channel Access Token
 char lineGroupId[40] = "";   // LINE Group ID (เช่น C1234abcd...)
 char minTempAlert[10] = "20.0";
 char maxTempAlert[10] = "35.0";
+char boardName[32] = "";     // Custom Board Name (เช่น Kitchen, ServerRoom)
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
@@ -43,6 +44,16 @@ int failedSyncCount = 0;            // นับจำนวนครั้ง�
 enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
 AlertState lastAlertState = STATE_NORMAL;
 unsigned long lastLineNotifyTime = 0;
+
+String getBoardIdentifier() {
+  String bName = String(boardName);
+  bName.trim();
+  if (bName.length() == 0) {
+    bName = "BOARD_" + String(ESP.getChipId(), HEX);
+    bName.toUpperCase();
+  }
+  return bName;
+}
 
 String currentStatus = "STARTING";
 float currentTemp = -999;
@@ -226,8 +237,7 @@ void flushQueue() {
   display.print(" buffered entries");
   display.display();
 
-  String boardID = "BOARD_" + String(ESP.getChipId(), HEX);
-  boardID.toUpperCase();
+  String boardID = getBoardIdentifier();
 
   int sentCount = 0;
   for (int i = 0; i < entryCount; i++) {
@@ -244,7 +254,7 @@ void flushQueue() {
     client.setInsecure();
     String url = String(webAppUrl) + "?temperature=" + tempStr
                + "&humidity=" + humidStr
-               + "&board_id=" + boardID
+               + "&board_id=" + urlEncode(boardID)
                + "&queued=1";
 
     bool ok = false;
@@ -329,12 +339,11 @@ void sendData() {
   HTTPClient http;
   client.setInsecure();
 
-  String boardID = "BOARD_" + String(ESP.getChipId(), HEX);
-  boardID.toUpperCase();
+  String boardID = getBoardIdentifier();
 
   String url = String(webAppUrl) + "?temperature=" + String(t, 1)
              + "&humidity=" + String(h, 1)
-             + "&board_id=" + boardID;
+             + "&board_id=" + urlEncode(boardID);
 
   bool syncSuccess = false;
   if (http.begin(client, url)) {
@@ -419,8 +428,7 @@ void checkLineAlerts(float temp, float humid) {
   float maxT = atof(maxTempAlert);
   unsigned long currentMillis = millis();
   
-  String boardID = "BOARD_" + String(ESP.getChipId(), HEX);
-  boardID.toUpperCase();
+  String boardID = getBoardIdentifier();
 
   AlertState newState = STATE_NORMAL;
   if (temp < minT && temp > -50) {
@@ -486,6 +494,7 @@ void openConfigPortal() {
   WiFiManagerParameter custom_groupid("groupid", "LINE Group ID (Cxxxxxxx)", lineGroupId, 40);
   WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
+  WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
 
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -493,6 +502,7 @@ void openConfigPortal() {
   wm.addParameter(&custom_groupid);
   wm.addParameter(&custom_min_temp);
   wm.addParameter(&custom_max_temp);
+  wm.addParameter(&custom_board_name);
 
   wm.setConfigPortalTimeout(120); // ปิด portal อัตโนมัติใน 2 นาที
 
@@ -516,6 +526,7 @@ void openConfigPortal() {
   strncpy(lineGroupId, custom_groupid.getValue(), sizeof(lineGroupId));
   strncpy(minTempAlert, custom_min_temp.getValue(), sizeof(minTempAlert));
   strncpy(maxTempAlert, custom_max_temp.getValue(), sizeof(maxTempAlert));
+  strncpy(boardName, custom_board_name.getValue(), sizeof(boardName));
 
   // บันทึกลง LittleFS
   File configFile = LittleFS.open("/config.bin", "w");
@@ -526,6 +537,7 @@ void openConfigPortal() {
     configFile.write((uint8_t*)minTempAlert, sizeof(minTempAlert));
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
     configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
+    configFile.write((uint8_t*)boardName, sizeof(boardName));
     configFile.close();
     Serial.println("Config saved after portal.");
   }
@@ -554,26 +566,38 @@ void setup() {
         size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
-        if (fileSize >= 420) {
+        if (fileSize >= 452) {
+          // รูปแบบใหม่ล่าสุด: lineToken 200, lineGroupId 40, boardName 32
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           configFile.readBytes(lineGroupId, sizeof(lineGroupId));
+          configFile.readBytes(boardName, sizeof(boardName));
+        } else if (fileSize >= 420) {
+          // รูปแบบใหม่: lineToken 200 bytes + lineGroupId 40 bytes
+          configFile.readBytes(lineToken, sizeof(lineToken));
+          configFile.readBytes(minTempAlert, sizeof(minTempAlert));
+          configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
+          configFile.readBytes(lineGroupId, sizeof(lineGroupId));
+          boardName[0] = '\0';
         } else if (fileSize >= 244) {
           configFile.readBytes(lineToken, 64);
           lineToken[63] = '\0';
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           lineGroupId[0] = '\0';
+          boardName[0] = '\0';
         } else if (fileSize >= 235) {
           configFile.readBytes(lineToken, 55);
           lineToken[54] = '\0';
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           lineGroupId[0] = '\0';
+          boardName[0] = '\0';
         } else {
           lineToken[0] = '\0';
           lineGroupId[0] = '\0';
+          boardName[0] = '\0';
           strcpy(minTempAlert, "20.0");
           strcpy(maxTempAlert, "35.0");
         }
@@ -585,6 +609,7 @@ void setup() {
         Serial.print("LINE Group: "); Serial.println(lineGroupId);
         Serial.print("Min Alert: "); Serial.println(minTempAlert);
         Serial.print("Max Alert: "); Serial.println(maxTempAlert);
+        Serial.print("Board Name: "); Serial.println(boardName);
       }
     }
   } else {
@@ -618,6 +643,7 @@ void setup() {
   WiFiManagerParameter custom_groupid("groupid", "LINE Group ID (Cxxxxxxx)", lineGroupId, 40);
   WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
+  WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -625,6 +651,7 @@ void setup() {
   wm.addParameter(&custom_groupid);
   wm.addParameter(&custom_min_temp);
   wm.addParameter(&custom_max_temp);
+  wm.addParameter(&custom_board_name);
   
   // ตั้งค่า Config ของ WiFiManager ให้เหมาะกับการจัดการตอนไฟตก
   wm.setConfigPortalTimeout(120); // ถ้าผ่านไป 2 นาทีไม่มีคนมาต่อ AP เพื่อตั้งค่า ให้หลุดจาก setup ไปทำ loop ต่อ (สำคัญมากตอนไฟดับแล้วเราไม่อยู่บ้าน)
@@ -659,6 +686,7 @@ void setup() {
   strncpy(lineGroupId, custom_groupid.getValue(), sizeof(lineGroupId));
   strncpy(minTempAlert, custom_min_temp.getValue(), sizeof(minTempAlert));
   strncpy(maxTempAlert, custom_max_temp.getValue(), sizeof(maxTempAlert));
+  strncpy(boardName, custom_board_name.getValue(), sizeof(boardName));
 
   File configFile = LittleFS.open("/config.bin", "w");
   if (configFile) {
@@ -668,6 +696,7 @@ void setup() {
     configFile.write((uint8_t*)minTempAlert, sizeof(minTempAlert));
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
     configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
+    configFile.write((uint8_t*)boardName, sizeof(boardName));
     configFile.close();
     Serial.println("Config saved to LittleFS.");
   }
