@@ -33,9 +33,11 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 char webAppUrl[150] = "";
 char timerDelayStr[10] = "30";
 char lineToken[200]  = "";   // LINE Messaging API Channel Access Token
-char lineGroupId[40] = "";   // LINE Group ID (เช่น C1234abcd...)
+char lineGroupId[40] = "";
 char minTempAlert[10] = "20.0";
 char maxTempAlert[10] = "35.0";
+char minHumidAlert[10] = "30.0";
+char maxHumidAlert[10] = "80.0";
 char boardName[32] = "";     // Custom Board Name (เช่น Kitchen, ServerRoom)
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
@@ -44,6 +46,8 @@ int failedSyncCount = 0;            // นับจำนวนครั้ง�
 enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
 AlertState lastAlertState = STATE_NORMAL;
 unsigned long lastLineNotifyTime = 0;
+AlertState lastHumidAlertState = STATE_NORMAL;
+unsigned long lastHumidLineNotifyTime = 0;
 bool isBootNotificationSent = false;
 
 String getBoardIdentifier() {
@@ -436,10 +440,13 @@ void checkLineAlerts(float temp, float humid) {
 
   float minT = atof(minTempAlert);
   float maxT = atof(maxTempAlert);
+  float minH = atof(minHumidAlert);
+  float maxH = atof(maxHumidAlert);
   unsigned long currentMillis = millis();
   
   String boardID = getBoardIdentifier();
 
+  // 1. ตรวจสอบอุณหภูมิ
   AlertState newState = STATE_NORMAL;
   if (temp < minT && temp > -50) {
     newState = STATE_ALERT_LOW;
@@ -447,7 +454,6 @@ void checkLineAlerts(float temp, float humid) {
     newState = STATE_ALERT_HIGH;
   }
 
-  // ส่งแจ้งเตือนเมื่อเกิดการเปลี่ยนสถานะ หรือถ้ายืนระยะอยู่ในสถานะแจ้งเตือนเดิมเกิน 30 นาที ให้ส่งซ้ำ
   if (newState != lastAlertState || 
       (newState != STATE_NORMAL && (currentMillis - lastLineNotifyTime >= 1800000))) {
     
@@ -461,12 +467,41 @@ void checkLineAlerts(float temp, float humid) {
     }
 
     if (message != "") {
-      Serial.print("LINE Alert triggering. State change from ");
+      Serial.print("LINE Temp Alert triggering. State change from ");
       Serial.print(lastAlertState); Serial.print(" to "); Serial.println(newState);
       sendLineNotify(message);
       lastLineNotifyTime = currentMillis;
     }
     lastAlertState = newState;
+  }
+
+  // 2. ตรวจสอบความชื้น
+  AlertState newHumidState = STATE_NORMAL;
+  if (humid < minH && humid >= 0) {
+    newHumidState = STATE_ALERT_LOW;
+  } else if (humid > maxH) {
+    newHumidState = STATE_ALERT_HIGH;
+  }
+
+  if (newHumidState != lastHumidAlertState || 
+      (newHumidState != STATE_NORMAL && (currentMillis - lastHumidLineNotifyTime >= 1800000))) {
+    
+    String message = "";
+    if (newHumidState == STATE_ALERT_LOW) {
+      message = "\n⚠️ [ALERT] Low Humidity!\nHumid: " + String(humid, 1) + " %\nMin Limit: " + String(minH, 1) + " %\nBoard: " + boardID;
+    } else if (newHumidState == STATE_ALERT_HIGH) {
+      message = "\n⚠️ [ALERT] High Humidity!\nHumid: " + String(humid, 1) + " %\nMax Limit: " + String(maxH, 1) + " %\nBoard: " + boardID;
+    } else if (newHumidState == STATE_NORMAL && lastHumidAlertState != STATE_NORMAL) {
+      message = "\n✅ [RESOLVED] Humidity returned to normal.\nHumid: " + String(humid, 1) + " %\nRange: " + String(minH, 1) + " - " + String(maxH, 1) + " %\nBoard: " + boardID;
+    }
+
+    if (message != "") {
+      Serial.print("LINE Humid Alert triggering. State change from ");
+      Serial.print(lastHumidAlertState); Serial.print(" to "); Serial.println(newHumidState);
+      sendLineNotify(message);
+      lastHumidLineNotifyTime = currentMillis;
+    }
+    lastHumidAlertState = newHumidState;
   }
 }
 
@@ -504,6 +539,8 @@ void openConfigPortal() {
   WiFiManagerParameter custom_groupid("groupid", "LINE Group ID (Cxxxxxxx)", lineGroupId, 40);
   WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
+  WiFiManagerParameter custom_min_humid("min_humid", "Min Humid Alert (%)", minHumidAlert, 10);
+  WiFiManagerParameter custom_max_humid("max_humid", "Max Humid Alert (%)", maxHumidAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
 
   wm.addParameter(&custom_url);
@@ -512,6 +549,8 @@ void openConfigPortal() {
   wm.addParameter(&custom_groupid);
   wm.addParameter(&custom_min_temp);
   wm.addParameter(&custom_max_temp);
+  wm.addParameter(&custom_min_humid);
+  wm.addParameter(&custom_max_humid);
   wm.addParameter(&custom_board_name);
 
   wm.setConfigPortalTimeout(120); // ปิด portal อัตโนมัติใน 2 นาที
@@ -536,6 +575,8 @@ void openConfigPortal() {
   strncpy(lineGroupId, custom_groupid.getValue(), sizeof(lineGroupId));
   strncpy(minTempAlert, custom_min_temp.getValue(), sizeof(minTempAlert));
   strncpy(maxTempAlert, custom_max_temp.getValue(), sizeof(maxTempAlert));
+  strncpy(minHumidAlert, custom_min_humid.getValue(), sizeof(minHumidAlert));
+  strncpy(maxHumidAlert, custom_max_humid.getValue(), sizeof(maxHumidAlert));
   strncpy(boardName, custom_board_name.getValue(), sizeof(boardName));
 
   // บันทึกลง LittleFS
@@ -548,6 +589,8 @@ void openConfigPortal() {
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
     configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
     configFile.write((uint8_t*)boardName, sizeof(boardName));
+    configFile.write((uint8_t*)minHumidAlert, sizeof(minHumidAlert));
+    configFile.write((uint8_t*)maxHumidAlert, sizeof(maxHumidAlert));
     configFile.close();
     Serial.println("Config saved after portal.");
   }
@@ -576,13 +619,24 @@ void setup() {
         size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
-        if (fileSize >= 452) {
-          // รูปแบบใหม่ล่าสุด: lineToken 200, lineGroupId 40, boardName 32
+        if (fileSize >= 472) {
+          // รูปแบบใหม่ล่าสุด: lineToken 200, minTemp 10, maxTemp 10, lineGroupId 40, boardName 32, minHumid 10, maxHumid 10
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           configFile.readBytes(lineGroupId, sizeof(lineGroupId));
           configFile.readBytes(boardName, sizeof(boardName));
+          configFile.readBytes(minHumidAlert, sizeof(minHumidAlert));
+          configFile.readBytes(maxHumidAlert, sizeof(maxHumidAlert));
+        } else if (fileSize >= 452) {
+          // รูปแบบที่มี boardName แต่ไม่มีความชื้น
+          configFile.readBytes(lineToken, sizeof(lineToken));
+          configFile.readBytes(minTempAlert, sizeof(minTempAlert));
+          configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
+          configFile.readBytes(lineGroupId, sizeof(lineGroupId));
+          configFile.readBytes(boardName, sizeof(boardName));
+          strcpy(minHumidAlert, "30.0");
+          strcpy(maxHumidAlert, "80.0");
         } else if (fileSize >= 420) {
           // รูปแบบใหม่: lineToken 200 bytes + lineGroupId 40 bytes
           configFile.readBytes(lineToken, sizeof(lineToken));
@@ -590,6 +644,8 @@ void setup() {
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           configFile.readBytes(lineGroupId, sizeof(lineGroupId));
           boardName[0] = '\0';
+          strcpy(minHumidAlert, "30.0");
+          strcpy(maxHumidAlert, "80.0");
         } else if (fileSize >= 244) {
           configFile.readBytes(lineToken, 64);
           lineToken[63] = '\0';
@@ -597,6 +653,8 @@ void setup() {
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           lineGroupId[0] = '\0';
           boardName[0] = '\0';
+          strcpy(minHumidAlert, "30.0");
+          strcpy(maxHumidAlert, "80.0");
         } else if (fileSize >= 235) {
           configFile.readBytes(lineToken, 55);
           lineToken[54] = '\0';
@@ -604,12 +662,16 @@ void setup() {
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           lineGroupId[0] = '\0';
           boardName[0] = '\0';
+          strcpy(minHumidAlert, "30.0");
+          strcpy(maxHumidAlert, "80.0");
         } else {
           lineToken[0] = '\0';
           lineGroupId[0] = '\0';
           boardName[0] = '\0';
           strcpy(minTempAlert, "20.0");
           strcpy(maxTempAlert, "35.0");
+          strcpy(minHumidAlert, "30.0");
+          strcpy(maxHumidAlert, "80.0");
         }
         configFile.close();
         Serial.println("Config loaded from LittleFS:");
@@ -619,6 +681,8 @@ void setup() {
         Serial.print("LINE Group: "); Serial.println(lineGroupId);
         Serial.print("Min Alert: "); Serial.println(minTempAlert);
         Serial.print("Max Alert: "); Serial.println(maxTempAlert);
+        Serial.print("Min Humid Alert: "); Serial.println(minHumidAlert);
+        Serial.print("Max Humid Alert: "); Serial.println(maxHumidAlert);
         Serial.print("Board Name: "); Serial.println(boardName);
       }
     }
@@ -653,6 +717,8 @@ void setup() {
   WiFiManagerParameter custom_groupid("groupid", "LINE Group ID (Cxxxxxxx)", lineGroupId, 40);
   WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
+  WiFiManagerParameter custom_min_humid("min_humid", "Min Humid Alert (%)", minHumidAlert, 10);
+  WiFiManagerParameter custom_max_humid("max_humid", "Max Humid Alert (%)", maxHumidAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
   
   wm.addParameter(&custom_url);
@@ -661,6 +727,8 @@ void setup() {
   wm.addParameter(&custom_groupid);
   wm.addParameter(&custom_min_temp);
   wm.addParameter(&custom_max_temp);
+  wm.addParameter(&custom_min_humid);
+  wm.addParameter(&custom_max_humid);
   wm.addParameter(&custom_board_name);
   
   // ตั้งค่า Config ของ WiFiManager ให้เหมาะกับการจัดการตอนไฟตก
@@ -696,6 +764,8 @@ void setup() {
   strncpy(lineGroupId, custom_groupid.getValue(), sizeof(lineGroupId));
   strncpy(minTempAlert, custom_min_temp.getValue(), sizeof(minTempAlert));
   strncpy(maxTempAlert, custom_max_temp.getValue(), sizeof(maxTempAlert));
+  strncpy(minHumidAlert, custom_min_humid.getValue(), sizeof(minHumidAlert));
+  strncpy(maxHumidAlert, custom_max_humid.getValue(), sizeof(maxHumidAlert));
   strncpy(boardName, custom_board_name.getValue(), sizeof(boardName));
 
   File configFile = LittleFS.open("/config.bin", "w");
@@ -707,6 +777,8 @@ void setup() {
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
     configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
     configFile.write((uint8_t*)boardName, sizeof(boardName));
+    configFile.write((uint8_t*)minHumidAlert, sizeof(minHumidAlert));
+    configFile.write((uint8_t*)maxHumidAlert, sizeof(maxHumidAlert));
     configFile.close();
     Serial.println("Config saved to LittleFS.");
   }
@@ -871,7 +943,7 @@ void loop() {
     
     // ตรวจสอบสถานะและแจ้งเตือน Line Notify
     if (currentTemp > -50 && currentTemp != -999) {
-      checkLineAlerts(currentTemp);
+      checkLineAlerts(currentTemp, currentHumid);
     }
     
     lastUpdate = currentMillis;
