@@ -638,9 +638,24 @@ void setup() {
   sensors.begin();
   sensors.setWaitForConversion(false); // ปิดการบล็อก เพื่อใช้เทคนิค Non-blocking ใน loop()
   
-  Wire.begin(4, 5); 
+  Wire.begin(4, 5); // SDA = 4 (D2), SCL = 5 (D1)
   
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_I2C_ADDR)) {
+  uint8_t oledAddr = SCREEN_I2C_ADDR;
+  Wire.beginTransmission(0x3C);
+  if (Wire.endTransmission() == 0) {
+    oledAddr = 0x3C;
+    Serial.println("OLED found at 0x3C");
+  } else {
+    Wire.beginTransmission(0x3D);
+    if (Wire.endTransmission() == 0) {
+      oledAddr = 0x3D;
+      Serial.println("OLED found at 0x3D");
+    } else {
+      Serial.println("Warning: No OLED found on I2C bus! Check wiring (SDA=D2, SCL=D1).");
+    }
+  }
+
+  if(!display.begin(SSD1306_SWITCHCAPVCC, oledAddr)) {
     Serial.println("SSD1306 allocation failed");
     for(;;);
   }
