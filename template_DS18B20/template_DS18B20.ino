@@ -9,6 +9,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <ArduinoOTA.h>
+#include <time.h>
 #include "bitmaps.h"
 
 // --- 1. Configuration ---
@@ -202,7 +203,8 @@ void queueData(float temp, float humid) {
   }
   File f = LittleFS.open(QUEUE_FILE, "a");
   if (f) {
-    f.println(String(temp, 1) + "," + String(humid, 1));
+    time_t now = time(nullptr);
+    f.println(String(now) + "," + String(temp, 1) + "," + String(humid, 1));
     f.close();
     Serial.print("Queued. Size: "); Serial.println(size + 1);
   }
@@ -243,11 +245,24 @@ void flushQueue() {
   for (int i = 0; i < entryCount; i++) {
     if (WiFi.status() != WL_CONNECTED) break;
 
-    int commaIdx = entries[i].indexOf(',');
-    if (commaIdx < 0) { sentCount++; continue; } // malformed → skip
+    int firstComma = entries[i].indexOf(',');
+    if (firstComma < 0) { sentCount++; continue; }
+    int secondComma = entries[i].indexOf(',', firstComma + 1);
 
-    String tempStr  = entries[i].substring(0, commaIdx);
-    String humidStr = entries[i].substring(commaIdx + 1);
+    String timestampStr = "";
+    String tempStr = "";
+    String humidStr = "";
+
+    if (secondComma < 0) {
+      // Backward compatibility: old format (temp,humid)
+      tempStr = entries[i].substring(0, firstComma);
+      humidStr = entries[i].substring(firstComma + 1);
+    } else {
+      // New format (timestamp,temp,humid)
+      timestampStr = entries[i].substring(0, firstComma);
+      tempStr = entries[i].substring(firstComma + 1, secondComma);
+      humidStr = entries[i].substring(secondComma + 1);
+    }
 
     WiFiClientSecure client;
     HTTPClient http;
@@ -256,6 +271,9 @@ void flushQueue() {
                + "&humidity=" + humidStr
                + "&board_id=" + urlEncode(boardID)
                + "&queued=1";
+    if (timestampStr.length() > 0 && timestampStr != "0") {
+      url += "&timestamp=" + timestampStr;
+    }
 
     bool ok = false;
     if (http.begin(client, url)) {
@@ -731,6 +749,7 @@ void setup() {
     Serial.println("Config saved to LittleFS.");
   }
 
+  configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   ArduinoOTA.setHostname(boardID.c_str());
   ArduinoOTA.begin();
 

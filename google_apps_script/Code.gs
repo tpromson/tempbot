@@ -47,10 +47,11 @@ var LINE_PUSH_URL   = "https://api.line.me/v2/bot/message/push";
 // ============================================================
 function doGet(e) {
   try {
-    var temperature = e.parameter.temperature;
-    var humidity    = e.parameter.humidity;
-    var boardId     = e.parameter.board_id;
-    var isQueued    = (e.parameter.queued === "1");
+    var temperature    = e.parameter.temperature;
+    var humidity       = e.parameter.humidity;
+    var boardId        = e.parameter.board_id;
+    var isQueued       = (e.parameter.queued === "1");
+    var timestampParam = e.parameter.timestamp;
 
     if (!temperature || !boardId) {
       return respond("ERROR: Missing temperature or board_id");
@@ -67,7 +68,15 @@ function doGet(e) {
 
     if (sheet.getLastRow() === 0) createHeader(sheet);
 
-    var now       = new Date();
+    var now = new Date();
+    // ถ้าบอร์ดส่งเวลา Unix Epoch ย้อนหลังมา ให้แปลงเป็นเวลาบันทึกจริง
+    if (isQueued && timestampParam) {
+      var epoch = parseInt(timestampParam);
+      if (!isNaN(epoch) && epoch > 1000000000) {
+        now = new Date(epoch * 1000);
+      }
+    }
+
     var timestamp = Utilities.formatDate(now, TIMEZONE, "yyyy-MM-dd HH:mm:ss");
 
     sheet.appendRow([
