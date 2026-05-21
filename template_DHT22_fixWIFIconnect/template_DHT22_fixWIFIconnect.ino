@@ -44,6 +44,7 @@ int failedSyncCount = 0;            // นับจำนวนครั้ง�
 enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
 AlertState lastAlertState = STATE_NORMAL;
 unsigned long lastLineNotifyTime = 0;
+bool isBootNotificationSent = false;
 
 String getBoardIdentifier() {
   String bName = String(boardName);
@@ -144,8 +145,8 @@ void updateDisplay(float temp, float humid, String status) {
   display.drawFastHLine(0, 10 + shiftY, 128, WHITE);
 
   if (temp > -100 && humid >= 0) {
-    // วาดเส้นแบ่งครึ่งหน้าจอแนวตั้ง
-    display.drawFastVLine(64 + shiftX, 10 + shiftY, 54, WHITE);
+    // วาดเส้นแบ่งครึ่งหน้าจอแนวตั้ง (ปรับความสูงลดลงเหลือ 44 เพื่อเว้นพื้นที่ด้านล่างให้แสดง IP)
+    display.drawFastVLine(64 + shiftX, 10 + shiftY, 44, WHITE);
     
     // คอลัมน์ซ้าย: แสดงอุณหภูมิ (Temperature)
     display.setTextSize(1);
@@ -173,6 +174,15 @@ void updateDisplay(float temp, float humid, String status) {
     display.setCursor(10 + shiftX, 30 + shiftY);
     display.print("SENSOR ERR");
   }
+
+  // แสดง IP Address ด้านล่างเมื่อเชื่อมต่อ WiFi สำเร็จ
+  if (WiFi.status() == WL_CONNECTED) {
+    display.setTextSize(1);
+    display.setCursor(5 + shiftX, 56 + shiftY);
+    display.print("IP: ");
+    display.print(WiFi.localIP().toString());
+  }
+
   display.display();
 }
 
@@ -790,6 +800,22 @@ void loop() {
 
   // ตรวจสอบสถานะ WiFi สม่ำเสมอ
   checkWiFiConnection();
+
+  // ส่ง Line Boot Notification ครั้งแรกที่เชื่อมต่อสำเร็จ
+  if (!isBootNotificationSent && WiFi.status() == WL_CONNECTED) {
+    String boardID = getBoardIdentifier();
+    String resetReason = ESP.getResetReason();
+    String ipAddr = WiFi.localIP().toString();
+    
+    String message = "\n🚀 [BOOT] Board Online!\n"
+                     "Name: " + boardID + "\n"
+                     "IP: " + ipAddr + "\n"
+                     "Reset Reason: " + resetReason;
+                     
+    Serial.println("Sending Boot Notification to LINE...");
+    sendLineNotify(message);
+    isBootNotificationSent = true;
+  }
 
   unsigned long currentMillis = millis();
 

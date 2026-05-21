@@ -45,6 +45,7 @@ int failedSyncCount = 0;            // นับจำนวนครั้ง�
 enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
 AlertState lastAlertState = STATE_NORMAL;
 unsigned long lastLineNotifyTime = 0;
+bool isBootNotificationSent = false;
 
 String getBoardIdentifier() {
   String bName = String(boardName);
@@ -163,6 +164,15 @@ void updateDisplay(float temp, String status) {
     display.setCursor(10 + shiftX, 30 + shiftY);
     display.print("SENSOR ERR");
   }
+
+  // แสดง IP Address ด้านล่างเมื่อเชื่อมต่อ WiFi สำเร็จ
+  if (WiFi.status() == WL_CONNECTED) {
+    display.setTextSize(1);
+    display.setCursor(5 + shiftX, 56 + shiftY);
+    display.print("IP: ");
+    display.print(WiFi.localIP().toString());
+  }
+
   display.display();
 }
 
@@ -784,6 +794,22 @@ void loop() {
 
   // ตรวจสอบสถานะ WiFi สม่ำเสมอ
   checkWiFiConnection();
+
+  // ส่ง Line Boot Notification ครั้งแรกที่เชื่อมต่อสำเร็จ
+  if (!isBootNotificationSent && WiFi.status() == WL_CONNECTED) {
+    String boardID = getBoardIdentifier();
+    String resetReason = ESP.getResetReason();
+    String ipAddr = WiFi.localIP().toString();
+    
+    String message = "\n🚀 [BOOT] Board Online!\n"
+                     "Name: " + boardID + "\n"
+                     "IP: " + ipAddr + "\n"
+                     "Reset Reason: " + resetReason;
+                     
+    Serial.println("Sending Boot Notification to LINE...");
+    sendLineNotify(message);
+    isBootNotificationSent = true;
+  }
 
   unsigned long currentMillis = millis();
 
