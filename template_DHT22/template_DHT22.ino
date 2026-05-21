@@ -52,6 +52,53 @@ AlertState lastHumidAlertState = STATE_NORMAL;
 unsigned long lastHumidLineNotifyTime = 0;
 bool isBootNotificationSent = false;
 
+float dailyMinTemp = 999.0;
+float dailyMaxTemp = -999.0;
+float dailyMinHumid = 999.0;
+float dailyMaxHumid = -999.0;
+int lastDayOfMinMax = -1;
+unsigned long lastSyncTimeEpoch = 0;
+
+String formatTime(time_t epoch, bool includeSeconds) {
+  if (epoch < 1000000000) {
+    return "--:--";
+  }
+  struct tm* timeinfo = localtime(&epoch);
+  char buffer[10];
+  if (includeSeconds) {
+    sprintf(buffer, "%02d:%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+  } else {
+    sprintf(buffer, "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
+  }
+  return String(buffer);
+}
+
+void updateDailyMinMax(float temp, float humid) {
+  time_t now = time(nullptr);
+  if (now < 1000000000) {
+    // Time not synced yet. Do not update/reset min/max.
+    return;
+  }
+  struct tm* timeinfo = localtime(&now);
+  int currentDay = timeinfo->tm_mday;
+  
+  if (lastDayOfMinMax != currentDay) {
+    // Midnight reset!
+    dailyMinTemp = temp;
+    dailyMaxTemp = temp;
+    dailyMinHumid = humid;
+    dailyMaxHumid = humid;
+    lastDayOfMinMax = currentDay;
+    Serial.println("Daily min/max reset for the new day.");
+  } else {
+    if (temp < dailyMinTemp) dailyMinTemp = temp;
+    if (temp > dailyMaxTemp) dailyMaxTemp = temp;
+    if (humid < dailyMinHumid) dailyMinHumid = humid;
+    if (humid > dailyMaxHumid) dailyMaxHumid = humid;
+  }
+}
+
+
 String getBoardIdentifier() {
   String bName = String(boardName);
   bName.trim();
@@ -151,42 +198,77 @@ void updateDisplay(float temp, float humid, String status) {
   display.drawFastHLine(0, 10 + shiftY, 128, WHITE);
 
   if (temp > -100 && humid >= 0) {
-    // วาดเส้นแบ่งครึ่งหน้าจอแนวตั้ง (ปรับความสูงลดลงเหลือ 44 เพื่อเว้นพื้นที่ด้านล่างให้แสดง IP)
+    updateDailyMinMax(temp, humid);
+
+    // วาดเส้นแบ่งครึ่งหน้าจอแนวตั้ง (สูง 44 พิกเซล)
     display.drawFastVLine(64 + shiftX, 10 + shiftY, 44, WHITE);
     
     // คอลัมน์ซ้าย: แสดงอุณหภูมิ (Temperature)
     display.setTextSize(1);
-    display.setCursor(5 + shiftX, 16 + shiftY);
+    display.setCursor(5 + shiftX, 14 + shiftY);
     display.print("TEMP");
     
     display.setTextSize(2);
-    display.setCursor(5 + shiftX, 32 + shiftY);
+    display.setCursor(5 + shiftX, 24 + shiftY);
     display.print(temp, 1);
     display.setTextSize(1);
     display.print(" C");
     
+    // แสดง Min/Max อุณหภูมิ
+    display.setCursor(5 + shiftX, 43 + shiftY);
+    if (dailyMinTemp > 500.0 || dailyMaxTemp < -500.0) {
+      display.print("L:-- H:--");
+    } else {
+      display.print("L:");
+      display.print((int)round(dailyMinTemp));
+      display.print(" H:");
+      display.print((int)round(dailyMaxTemp));
+    }
+    
     // คอลัมน์ขวา: แสดงความชื้น (Humidity)
     display.setTextSize(1);
-    display.setCursor(72 + shiftX, 16 + shiftY);
+    display.setCursor(72 + shiftX, 14 + shiftY);
     display.print("HUMID");
     
     display.setTextSize(2);
-    display.setCursor(72 + shiftX, 32 + shiftY);
+    display.setCursor(72 + shiftX, 24 + shiftY);
     display.print(humid, 1);
     display.setTextSize(1);
     display.print(" %");
+    
+    // แสดง Min/Max ความชื้น
+    display.setCursor(72 + shiftX, 43 + shiftY);
+    if (dailyMinHumid > 500.0 || dailyMaxHumid < -500.0) {
+      display.print("L:-- H:--");
+    } else {
+      display.print("L:");
+      display.print((int)round(dailyMinHumid));
+      display.print(" H:");
+      display.print((int)round(dailyMaxHumid));
+    }
   } else {
     display.setTextSize(2);
     display.setCursor(10 + shiftX, 30 + shiftY);
     display.print("SENSOR ERR");
   }
 
-  // แสดง IP Address ด้านล่างเมื่อเชื่อมต่อ WiFi สำเร็จ
+  // แสดง IP Address หรือ NTP Time / Last Sync ด้านล่าง
   if (WiFi.status() == WL_CONNECTED) {
     display.setTextSize(1);
     display.setCursor(5 + shiftX, 56 + shiftY);
-    display.print("IP: ");
-    display.print(WiFi.localIP().toString());
+    
+    bool showIP = ((millis() / 4000) % 2 == 0);
+    time_t now = time(nullptr);
+    if (showIP || now < 1000000000) {
+      display.print("IP: ");
+      display.print(WiFi.localIP().toString());
+    } else {
+      String currTime = formatTime(now, true);
+      String syncTime = formatTime(lastSyncTimeEpoch, false);
+      display.print(currTime);
+      display.print(" | Sync ");
+      display.print(syncTime);
+    }
   }
 
   display.display();
@@ -315,6 +397,10 @@ void flushQueue() {
     yield();
   }
 
+  if (sentCount > 0) {
+    lastSyncTimeEpoch = time(nullptr);
+  }
+
   if (sentCount >= entryCount) {
     LittleFS.remove(QUEUE_FILE);
     Serial.println("Queue fully flushed!");
@@ -387,6 +473,7 @@ void sendData() {
       currentStatus = "SYNCED";
       failedSyncCount = 0;
       syncSuccess = true;
+      lastSyncTimeEpoch = time(nullptr);
     } else {
       currentStatus = "ERR " + String(httpCode);
     }
