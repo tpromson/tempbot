@@ -39,6 +39,7 @@ char lineGroupId[40] = "";   // LINE Group ID (เช่น C1234abcd...)
 char minTempAlert[10] = "20.0";
 char maxTempAlert[10] = "35.0";
 char boardName[32] = "";     // Custom Board Name (เช่น Kitchen, ServerRoom)
+char otaPassword[32] = "";   // ArduinoOTA update password
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
@@ -525,7 +526,8 @@ void openConfigPortal() {
   WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
-
+  WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
+  
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
   wm.addParameter(&custom_token);
@@ -533,6 +535,7 @@ void openConfigPortal() {
   wm.addParameter(&custom_min_temp);
   wm.addParameter(&custom_max_temp);
   wm.addParameter(&custom_board_name);
+  wm.addParameter(&custom_ota_password);
 
   wm.setConfigPortalTimeout(120); // ปิด portal อัตโนมัติใน 2 นาที
 
@@ -557,6 +560,7 @@ void openConfigPortal() {
   strncpy(minTempAlert, custom_min_temp.getValue(), sizeof(minTempAlert));
   strncpy(maxTempAlert, custom_max_temp.getValue(), sizeof(maxTempAlert));
   strncpy(boardName, custom_board_name.getValue(), sizeof(boardName));
+  strncpy(otaPassword, custom_ota_password.getValue(), sizeof(otaPassword));
 
   // บันทึกลง LittleFS
   File configFile = LittleFS.open("/config.bin", "w");
@@ -568,6 +572,7 @@ void openConfigPortal() {
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
     configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
     configFile.write((uint8_t*)boardName, sizeof(boardName));
+    configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
     configFile.close();
     Serial.println("Config saved after portal.");
   }
@@ -596,13 +601,22 @@ void setup() {
         size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
-        if (fileSize >= 452) {
-          // รูปแบบใหม่ล่าสุด: lineToken 200, lineGroupId 40, boardName 32
+        if (fileSize >= 484) {
+          // รูปแบบใหม่ล่าสุด: มี otaPassword
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           configFile.readBytes(lineGroupId, sizeof(lineGroupId));
           configFile.readBytes(boardName, sizeof(boardName));
+          configFile.readBytes(otaPassword, sizeof(otaPassword));
+        } else if (fileSize >= 452) {
+          // รูปแบบที่มี boardName แต่ไม่มี otaPassword
+          configFile.readBytes(lineToken, sizeof(lineToken));
+          configFile.readBytes(minTempAlert, sizeof(minTempAlert));
+          configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
+          configFile.readBytes(lineGroupId, sizeof(lineGroupId));
+          configFile.readBytes(boardName, sizeof(boardName));
+          otaPassword[0] = '\0';
         } else if (fileSize >= 420) {
           // รูปแบบใหม่: lineToken 200 bytes + lineGroupId 40 bytes
           configFile.readBytes(lineToken, sizeof(lineToken));
@@ -692,6 +706,7 @@ void setup() {
   WiFiManagerParameter custom_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
+  WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -700,6 +715,7 @@ void setup() {
   wm.addParameter(&custom_min_temp);
   wm.addParameter(&custom_max_temp);
   wm.addParameter(&custom_board_name);
+  wm.addParameter(&custom_ota_password);
   
   // ตั้งค่า Config ของ WiFiManager ให้เหมาะกับการจัดการตอนไฟตก
   wm.setConfigPortalTimeout(120); // ถ้าผ่านไป 2 นาทีไม่มีคนมาต่อ AP เพื่อตั้งค่า ให้หลุดจาก setup ไปทำ loop ต่อ (สำคัญมากตอนไฟดับแล้วเราไม่อยู่บ้าน)
@@ -735,6 +751,7 @@ void setup() {
   strncpy(minTempAlert, custom_min_temp.getValue(), sizeof(minTempAlert));
   strncpy(maxTempAlert, custom_max_temp.getValue(), sizeof(maxTempAlert));
   strncpy(boardName, custom_board_name.getValue(), sizeof(boardName));
+  strncpy(otaPassword, custom_ota_password.getValue(), sizeof(otaPassword));
 
   File configFile = LittleFS.open("/config.bin", "w");
   if (configFile) {
@@ -745,12 +762,19 @@ void setup() {
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
     configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
     configFile.write((uint8_t*)boardName, sizeof(boardName));
+    configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
     configFile.close();
     Serial.println("Config saved to LittleFS.");
   }
 
   configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   ArduinoOTA.setHostname(boardID.c_str());
+  if (otaPassword[0] != '\0') {
+    ArduinoOTA.setPassword(otaPassword);
+    Serial.println("ArduinoOTA: Password protection enabled.");
+  } else {
+    Serial.println("ArduinoOTA: Unprotected.");
+  }
   ArduinoOTA.begin();
 
   if (WiFi.status() == WL_CONNECTED) {

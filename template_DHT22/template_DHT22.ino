@@ -40,6 +40,7 @@ char maxTempAlert[10] = "35.0";
 char minHumidAlert[10] = "30.0";
 char maxHumidAlert[10] = "80.0";
 char boardName[32] = "";     // Custom Board Name (เช่น Kitchen, ServerRoom)
+char otaPassword[32] = "";   // ArduinoOTA update password
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
@@ -571,7 +572,8 @@ void openConfigPortal() {
   WiFiManagerParameter custom_min_humid("min_humid", "Min Humid Alert (%)", minHumidAlert, 10);
   WiFiManagerParameter custom_max_humid("max_humid", "Max Humid Alert (%)", maxHumidAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
-
+  WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
+  
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
   wm.addParameter(&custom_token);
@@ -581,6 +583,7 @@ void openConfigPortal() {
   wm.addParameter(&custom_min_humid);
   wm.addParameter(&custom_max_humid);
   wm.addParameter(&custom_board_name);
+  wm.addParameter(&custom_ota_password);
 
   wm.setConfigPortalTimeout(120); // ปิด portal อัตโนมัติใน 2 นาที
 
@@ -607,6 +610,7 @@ void openConfigPortal() {
   strncpy(minHumidAlert, custom_min_humid.getValue(), sizeof(minHumidAlert));
   strncpy(maxHumidAlert, custom_max_humid.getValue(), sizeof(maxHumidAlert));
   strncpy(boardName, custom_board_name.getValue(), sizeof(boardName));
+  strncpy(otaPassword, custom_ota_password.getValue(), sizeof(otaPassword));
 
   // บันทึกลง LittleFS
   File configFile = LittleFS.open("/config.bin", "w");
@@ -620,6 +624,7 @@ void openConfigPortal() {
     configFile.write((uint8_t*)boardName, sizeof(boardName));
     configFile.write((uint8_t*)minHumidAlert, sizeof(minHumidAlert));
     configFile.write((uint8_t*)maxHumidAlert, sizeof(maxHumidAlert));
+    configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
     configFile.close();
     Serial.println("Config saved after portal.");
   }
@@ -648,8 +653,8 @@ void setup() {
         size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
-        if (fileSize >= 472) {
-          // รูปแบบใหม่ล่าสุด: lineToken 200, minTemp 10, maxTemp 10, lineGroupId 40, boardName 32, minHumid 10, maxHumid 10
+        if (fileSize >= 504) {
+          // รูปแบบใหม่ล่าสุด: มี otaPassword
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
@@ -657,6 +662,17 @@ void setup() {
           configFile.readBytes(boardName, sizeof(boardName));
           configFile.readBytes(minHumidAlert, sizeof(minHumidAlert));
           configFile.readBytes(maxHumidAlert, sizeof(maxHumidAlert));
+          configFile.readBytes(otaPassword, sizeof(otaPassword));
+        } else if (fileSize >= 472) {
+          // รูปแบบที่มีความชื้นและ boardName แต่ไม่มี otaPassword
+          configFile.readBytes(lineToken, sizeof(lineToken));
+          configFile.readBytes(minTempAlert, sizeof(minTempAlert));
+          configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
+          configFile.readBytes(lineGroupId, sizeof(lineGroupId));
+          configFile.readBytes(boardName, sizeof(boardName));
+          configFile.readBytes(minHumidAlert, sizeof(minHumidAlert));
+          configFile.readBytes(maxHumidAlert, sizeof(maxHumidAlert));
+          otaPassword[0] = '\0';
         } else if (fileSize >= 452) {
           // รูปแบบที่มี boardName แต่ไม่มีความชื้น
           configFile.readBytes(lineToken, sizeof(lineToken));
@@ -764,6 +780,7 @@ void setup() {
   WiFiManagerParameter custom_min_humid("min_humid", "Min Humid Alert (%)", minHumidAlert, 10);
   WiFiManagerParameter custom_max_humid("max_humid", "Max Humid Alert (%)", maxHumidAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
+  WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -774,6 +791,7 @@ void setup() {
   wm.addParameter(&custom_min_humid);
   wm.addParameter(&custom_max_humid);
   wm.addParameter(&custom_board_name);
+  wm.addParameter(&custom_ota_password);
   
   // ตั้งค่า Config ของ WiFiManager ให้เหมาะกับการจัดการตอนไฟตก
   wm.setConfigPortalTimeout(120); // ถ้าผ่านไป 2 นาทีไม่มีคนมาต่อ AP เพื่อตั้งค่า ให้หลุดจาก setup ไปทำ loop ต่อ (สำคัญมากตอนไฟดับแล้วเราไม่อยู่บ้าน)
@@ -811,6 +829,7 @@ void setup() {
   strncpy(minHumidAlert, custom_min_humid.getValue(), sizeof(minHumidAlert));
   strncpy(maxHumidAlert, custom_max_humid.getValue(), sizeof(maxHumidAlert));
   strncpy(boardName, custom_board_name.getValue(), sizeof(boardName));
+  strncpy(otaPassword, custom_ota_password.getValue(), sizeof(otaPassword));
 
   File configFile = LittleFS.open("/config.bin", "w");
   if (configFile) {
@@ -823,12 +842,19 @@ void setup() {
     configFile.write((uint8_t*)boardName, sizeof(boardName));
     configFile.write((uint8_t*)minHumidAlert, sizeof(minHumidAlert));
     configFile.write((uint8_t*)maxHumidAlert, sizeof(maxHumidAlert));
+    configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
     configFile.close();
     Serial.println("Config saved to LittleFS.");
   }
 
   configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   ArduinoOTA.setHostname(boardID.c_str());
+  if (otaPassword[0] != '\0') {
+    ArduinoOTA.setPassword(otaPassword);
+    Serial.println("ArduinoOTA: Password protection enabled.");
+  } else {
+    Serial.println("ArduinoOTA: Unprotected.");
+  }
   ArduinoOTA.begin();
 
   if (WiFi.status() == WL_CONNECTED) {
