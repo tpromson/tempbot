@@ -271,8 +271,8 @@ function generateDailyReport(boardId) {
     for (var i = data.length - 1; i >= 0; i--) {
       var rowDate = new Date(data[i][0]);
       if (rowDate >= oneDayAgo) {
-        targetBoard = data[i][1];
-        break;
+        targetBoard = data[i][1] ? String(data[i][1]) : "";
+        if (targetBoard !== "") break;
       }
     }
   }
@@ -284,7 +284,7 @@ function generateDailyReport(boardId) {
   var filtered = [];
   for (var i = 0; i < data.length; i++) {
     var rowDate = new Date(data[i][0]);
-    if (rowDate >= oneDayAgo && data[i][1].toLowerCase() === targetBoard.toLowerCase()) {
+    if (rowDate >= oneDayAgo && data[i][1] && String(data[i][1]).toLowerCase() === targetBoard.toLowerCase()) {
       filtered.push({
         time: rowDate,
         temp: parseFloat(data[i][2]),
@@ -300,8 +300,8 @@ function generateDailyReport(boardId) {
   // นำชื่อจริงของบอร์ดมาแสดง
   var realBoardName = targetBoard;
   for (var i = data.length - 1; i >= 0; i--) {
-    if (data[i][1].toLowerCase() === targetBoard.toLowerCase()) {
-      realBoardName = data[i][1];
+    if (data[i][1] && String(data[i][1]).toLowerCase() === targetBoard.toLowerCase()) {
+      realBoardName = String(data[i][1]);
       break;
     }
   }
