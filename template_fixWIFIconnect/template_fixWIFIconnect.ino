@@ -22,6 +22,10 @@
 #define FRAME_HEIGHT 64
 #define FRAME_COUNT 25
 
+// Offline Data Queue
+#define QUEUE_FILE        "/queue.csv"
+#define MAX_QUEUE_ENTRIES 32
+
 // --- 2. Objects ---
 OneWire oneWire(SENSOR_PIN);
 DallasTemperature sensors(&oneWire);
@@ -152,64 +156,183 @@ void updateDisplay(float temp, String status) {
 
 // --- 5. Logic Functions ---
 
-void sendData() {
-  // ตรวจสอบ WiFi ก่อนส่งทุกครั้ง ถ้าไม่ต่อให้ข้ามไปก่อน
-  if (WiFi.status() != WL_CONNECTED) {
-    currentStatus = "NO WIFI";
-    failedSyncCount++;
-    if (failedSyncCount >= 10) {
-      Serial.println("Watchdog: Sync failed 10 times consecutively. Rebooting...");
-      playCatAnimation(2, "WATCHDOG REBOOT");
-      delay(1000);
-      ESP.restart();
-    }
+// --- 5. Offline Queue Functions ---
+
+int getQueueSize() {
+  if (!LittleFS.exists(QUEUE_FILE)) return 0;
+  File f = LittleFS.open(QUEUE_FILE, "r");
+  if (!f) return 0;
+  int count = 0;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() > 2) count++;
+  }
+  f.close();
+  return count;
+}
+
+void queueData(float temp, float humid) {
+  int size = getQueueSize();
+  if (size >= MAX_QUEUE_ENTRIES) {
+    Serial.println("Queue full! Entry dropped.");
     return;
   }
+  File f = LittleFS.open(QUEUE_FILE, "a");
+  if (f) {
+    f.println(String(temp, 1) + "," + String(humid, 1));
+    f.close();
+    Serial.print("Queued. Size: "); Serial.println(size + 1);
+  }
+}
 
-  // ตรวจสอบว่ามี URL ตั้งค่าไว้แล้วก่อนส่ง
+void flushQueue() {
+  if (!LittleFS.exists(QUEUE_FILE)) return;
+
+  File f = LittleFS.open(QUEUE_FILE, "r");
+  if (!f) return;
+
+  String entries[MAX_QUEUE_ENTRIES];
+  int entryCount = 0;
+  while (f.available() && entryCount < MAX_QUEUE_ENTRIES) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() > 2) entries[entryCount++] = line;
+  }
+  f.close();
+
+  if (entryCount == 0) { LittleFS.remove(QUEUE_FILE); return; }
+
+  Serial.print("Flushing "); Serial.print(entryCount); Serial.println(" queued entries...");
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(5, 10);
+  display.print("SYNCING OFFLINE DATA");
+  display.setCursor(5, 25);
+  display.print(entryCount);
+  display.print(" buffered entries");
+  display.display();
+
+  String boardID = "BOARD_" + String(ESP.getChipId(), HEX);
+  boardID.toUpperCase();
+
+  int sentCount = 0;
+  for (int i = 0; i < entryCount; i++) {
+    if (WiFi.status() != WL_CONNECTED) break;
+
+    int commaIdx = entries[i].indexOf(',');
+    if (commaIdx < 0) { sentCount++; continue; } // malformed → skip
+
+    String tempStr  = entries[i].substring(0, commaIdx);
+    String humidStr = entries[i].substring(commaIdx + 1);
+
+    WiFiClientSecure client;
+    HTTPClient http;
+    client.setInsecure();
+    String url = String(webAppUrl) + "?temperature=" + tempStr
+               + "&humidity=" + humidStr
+               + "&board_id=" + boardID
+               + "&queued=1";
+
+    bool ok = false;
+    if (http.begin(client, url)) {
+      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+      http.setTimeout(10000);
+      ok = (http.GET() == 200);
+      http.end();
+    }
+
+    if (ok) {
+      sentCount++;
+      display.fillRect(0, 40, 128, 20, BLACK);
+      display.setCursor(5, 42);
+      display.print("Sent: ");
+      display.print(sentCount);
+      display.print("/");
+      display.print(entryCount);
+      display.display();
+    } else {
+      break; // WiFi หลุดหรือ server error → หยุดและลองใหม่รอบหน้า
+    }
+    ArduinoOTA.handle();
+    delay(300);
+    yield();
+  }
+
+  if (sentCount >= entryCount) {
+    LittleFS.remove(QUEUE_FILE);
+    Serial.println("Queue fully flushed!");
+  } else {
+    // เขียน entries ที่ยังไม่ได้ส่งกลับไว้
+    File fw = LittleFS.open(QUEUE_FILE, "w");
+    if (fw) {
+      for (int i = sentCount; i < entryCount; i++) fw.println(entries[i]);
+      fw.close();
+    }
+    Serial.print("Partial flush: "); Serial.print(sentCount);
+    Serial.print("/"); Serial.println(entryCount);
+  }
+}
+
+// --- 6. Logic Functions ---
+
+void sendData() {
+  // ตรวจสอบว่ามี URL ตั้งค่าไว้แล้วก่อน
   if (strlen(webAppUrl) < 10) {
     currentStatus = "NO URL";
-    Serial.println("sendData: webAppUrl is not set.");
     return;
   }
 
-  sensors.requestTemperatures(); 
-  delay(750); // รอ DS18B20 แปลงค่าความละเอียด 12-bit
-  
+  // อ่านค่าเซนเซอร์เสมอ ไม่ว่า WiFi จะต่ออยู่หรือไม่
+  sensors.requestTemperatures();
+  delay(750); // รอ DS18B20 แปลงค่า 12-bit
+
   float t = sensors.getTempCByIndex(0);
-  // ใช้ช่วง valid range ของ DS18B20 (-55 ถึง 125°C) แทนการตรวจ 85.0 แบบ exact
   if (t == DEVICE_DISCONNECTED_C || t < -55.0 || t > 125.0) {
     currentStatus = "SENS ERR";
     failedSyncCount++;
     if (failedSyncCount >= 10) {
-      Serial.println("Watchdog: Sync failed 10 times consecutively. Rebooting...");
       playCatAnimation(2, "WATCHDOG REBOOT");
-      delay(1000);
-      ESP.restart();
+      delay(1000); ESP.restart();
+    }
+    return;
+  }
+  currentTemp = t;
+
+  // WiFi ไม่ต่อ → เก็บข้อมูลใน Offline Queue
+  if (WiFi.status() != WL_CONNECTED) {
+    queueData(t, 0.0);
+    int qs = getQueueSize();
+    currentStatus = "BUFFERED:" + String(qs);
+    failedSyncCount++;
+    if (failedSyncCount >= 10) {
+      playCatAnimation(2, "WATCHDOG REBOOT");
+      delay(1000); ESP.restart();
     }
     return;
   }
 
-  // อัปเดตค่าปัจจุบันทันทีหลังอ่านเซนเซอร์สำเร็จ
-  currentTemp = t;
-
+  // WiFi ต่ออยู่ → ส่งข้อมูลปกติ
   WiFiClientSecure client;
   HTTPClient http;
   client.setInsecure();
-  
+
   String boardID = "BOARD_" + String(ESP.getChipId(), HEX);
   boardID.toUpperCase();
-  
-  String url = String(webAppUrl) + "?temperature=" + String(t, 1) + "&humidity=0&board_id=" + boardID;
-  
+
+  String url = String(webAppUrl) + "?temperature=" + String(t, 1)
+             + "&humidity=0&board_id=" + boardID;
+
   bool syncSuccess = false;
   if (http.begin(client, url)) {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    http.setTimeout(10000); 
+    http.setTimeout(10000);
     int httpCode = http.GET();
     if (httpCode == 200) {
       currentStatus = "SYNCED";
-      failedSyncCount = 0; // รีเซ็ตตัวนับเมื่อสำเร็จ
+      failedSyncCount = 0;
       syncSuccess = true;
     } else {
       currentStatus = "ERR " + String(httpCode);
@@ -223,13 +346,15 @@ void sendData() {
     failedSyncCount++;
     Serial.print("Watchdog: Failed sync count = "); Serial.println(failedSyncCount);
     if (failedSyncCount >= 10) {
-      Serial.println("Watchdog: Sync failed 10 times consecutively. Rebooting...");
       playCatAnimation(2, "WATCHDOG REBOOT");
-      delay(1000);
-      ESP.restart();
+      delay(1000); ESP.restart();
     }
+  } else {
+    // ส่งสำเร็จ → flush ข้อมูลที่ค้างอยู่ใน queue
+    flushQueue();
   }
 }
+
 
 String urlEncode(String str) {
   String encoded = "";
