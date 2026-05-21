@@ -462,7 +462,35 @@ function generateDailyReport(boardId) {
     });
   }
 
-  var chartUrl = "https://quickchart.io/chart?w=600&h=380&bkg=white&c=" + encodeURIComponent(JSON.stringify(chartConfig));
+  var chartUrl = "";
+  try {
+    var shortenerRes = UrlFetchApp.fetch("https://quickchart.io/chart/create", {
+      method: "POST",
+      contentType: "application/json",
+      payload: JSON.stringify({
+        width: 600,
+        height: 380,
+        backgroundColor: "white",
+        chart: chartConfig
+      }),
+      muteHttpExceptions: true
+    });
+    
+    if (shortenerRes.getResponseCode() === 200) {
+      var resJson = JSON.parse(shortenerRes.getContentText());
+      if (resJson.success) {
+        chartUrl = resJson.url;
+        Logger.log("QuickChart Short URL generated: " + chartUrl);
+      }
+    }
+  } catch (e) {
+    Logger.log("QuickChart shortener failed: " + e.toString());
+  }
+
+  // Fallback ในกรณีที่ Shortener ล้มเหลว
+  if (!chartUrl) {
+    chartUrl = "https://quickchart.io/chart?w=600&h=380&bkg=white&c=" + encodeURIComponent(JSON.stringify(chartConfig));
+  }
 
   // 6. ประกอบข้อความรายงานสรุป
   var timeFormat = "yyyy-MM-dd HH:mm";
