@@ -252,7 +252,7 @@ void updateDisplay(float temp, float humid, String status) {
       display.print("IP: ");
       display.print(WiFi.localIP().toString());
     } else if (displayState == 1) {
-      String currTime = formatTime(now, true);
+      String currTime = formatTime(now, false);
       String syncTime = formatTime(lastSyncTimeEpoch, false);
       display.print(currTime);
       display.print(" | Sync ");
