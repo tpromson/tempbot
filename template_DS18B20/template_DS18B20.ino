@@ -205,40 +205,42 @@ void updateDisplay(float temp, String status) {
     display.print(temp, 1);
     display.setTextSize(2);
     display.print(" C");
-    
-    // แสดง Min/Max อุณหภูมิของวัน
-    display.setTextSize(1);
-    display.setCursor(5 + shiftX, 43 + shiftY);
-    if (dailyMinTemp > 500.0 || dailyMaxTemp < -500.0) {
-      display.print("L: --.- H: --.-");
-    } else {
-      display.print("L: ");
-      display.print(dailyMinTemp, 1);
-      display.print("  H: ");
-      display.print(dailyMaxTemp, 1);
-    }
   } else {
     display.setTextSize(2);
     display.setCursor(10 + shiftX, 30 + shiftY);
     display.print("SENSOR ERR");
   }
 
-  // แสดง IP Address หรือ NTP Time / Last Sync ด้านล่าง
+  // แสดง IP Address หรือ NTP Time / Last Sync หรือ Min/Max ด้านล่าง
   if (WiFi.status() == WL_CONNECTED) {
     display.setTextSize(1);
     display.setCursor(5 + shiftX, 56 + shiftY);
     
-    bool showIP = ((millis() / 10000) % 2 == 0);
+    int displayState = (millis() / 5000) % 3;
     time_t now = time(nullptr);
-    if (showIP || now < 1000000000) {
+    
+    if (now < 1000000000) {
+      displayState = 0; // Force IP if time not synced
+    }
+
+    if (displayState == 0) {
       display.print("IP: ");
       display.print(WiFi.localIP().toString());
-    } else {
+    } else if (displayState == 1) {
       String currTime = formatTime(now, true);
       String syncTime = formatTime(lastSyncTimeEpoch, false);
       display.print(currTime);
       display.print(" | Sync ");
       display.print(syncTime);
+    } else if (displayState == 2) {
+      if (dailyMinTemp > 500.0 || dailyMaxTemp < -500.0) {
+        display.print("L: --.- H: --.-");
+      } else {
+        display.print("L: ");
+        display.print(dailyMinTemp, 1);
+        display.print("  H: ");
+        display.print(dailyMaxTemp, 1);
+      }
     }
   }
 
