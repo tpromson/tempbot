@@ -200,36 +200,18 @@ void updateDisplay(float temp, float humid, String status) {
   if (temp > -100 && humid >= 0) {
     updateDailyMinMax(temp, humid);
 
-    // วาดเส้นแบ่งครึ่งหน้าจอแนวตั้ง (สูง 44 พิกเซล)
-    display.drawFastVLine(64 + shiftX, 10 + shiftY, 44, WHITE);
-    
-    // คอลัมน์ซ้าย: แสดงอุณหภูมิ (Temperature)
-    display.setTextSize(1);
-    display.setCursor(5 + shiftX, 14 + shiftY);
-    display.print("TEMP");
-    
+    // แสดงอุณหภูมิ (Temperature) เต็มบรรทัด
     display.setTextSize(2);
-    display.setCursor(5 + shiftX, 24 + shiftY);
+    display.setCursor(5 + shiftX, 15 + shiftY);
+    display.print("T: ");
     display.print(temp, 1);
-    display.setTextSize(1);
     display.print(" C");
     
-    // แสดง Min/Max อุณหภูมิ
-    // (Moved to bottom line)
-    
-    // คอลัมน์ขวา: แสดงความชื้น (Humidity)
-    display.setTextSize(1);
-    display.setCursor(72 + shiftX, 14 + shiftY);
-    display.print("HUMID");
-    
-    display.setTextSize(2);
-    display.setCursor(72 + shiftX, 24 + shiftY);
+    // แสดงความชื้น (Humidity) เต็มบรรทัด
+    display.setCursor(5 + shiftX, 35 + shiftY);
+    display.print("H: ");
     display.print(humid, 1);
-    display.setTextSize(1);
     display.print(" %");
-    
-    // แสดง Min/Max ความชื้น
-    // (Moved to bottom line)
   } else {
     display.setTextSize(2);
     display.setCursor(10 + shiftX, 30 + shiftY);
@@ -241,7 +223,7 @@ void updateDisplay(float temp, float humid, String status) {
     display.setTextSize(1);
     display.setCursor(5 + shiftX, 56 + shiftY);
     
-    int displayState = (millis() / 5000) % 4;
+    int displayState = (millis() / 15000) % 4;
     time_t now = time(nullptr);
     
     if (now < 1000000000) {

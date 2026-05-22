@@ -199,12 +199,12 @@ void updateDisplay(float temp, String status) {
   if (temp != DEVICE_DISCONNECTED_C && temp > -50 && temp < 125.0) {
     updateDailyMinMax(temp);
 
-    // แสดงอุณหภูมิปัจจุบัน (ลดขนาดตัวอักษรลงเหลือ 3 เพื่อให้มีพื้นที่แสดงค่า Min/Max)
-    display.setTextSize(3);
-    display.setCursor(5 + shiftX, 16 + shiftY);
+    // แสดงอุณหภูมิปัจจุบัน (ขนาดใหญ่เต็มจอ)
+    display.setTextSize(4);
+    display.setCursor(0 + shiftX, 20 + shiftY);
     display.print(temp, 1);
     display.setTextSize(2);
-    display.print(" C");
+    display.print("C");
   } else {
     display.setTextSize(2);
     display.setCursor(10 + shiftX, 30 + shiftY);
@@ -216,7 +216,7 @@ void updateDisplay(float temp, String status) {
     display.setTextSize(1);
     display.setCursor(5 + shiftX, 56 + shiftY);
     
-    int displayState = (millis() / 5000) % 3;
+    int displayState = (millis() / 15000) % 3;
     time_t now = time(nullptr);
     
     if (now < 1000000000) {
