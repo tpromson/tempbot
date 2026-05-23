@@ -11,6 +11,7 @@
 #include <ArduinoOTA.h>
 #include <time.h>
 #include "bitmaps.h"
+#include <ESP8266WebServer.h>
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DS18B20)
@@ -54,6 +55,8 @@ float dailyMaxTemp = -999.0;
 int lastDayOfMinMax = -1;
 unsigned long lastSyncTimeEpoch = 0;
 
+ESP8266WebServer server(80);
+
 String formatTime(time_t epoch, bool includeSeconds) {
   if (epoch < 1000000000) {
     return "--:--";
@@ -66,6 +69,21 @@ String formatTime(time_t epoch, bool includeSeconds) {
     sprintf(buffer, "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
   }
   return String(buffer);
+}
+
+void saveConfig() {
+  File configFile = LittleFS.open("/config.bin", "w");
+  if (configFile) {
+    configFile.write((uint8_t*)webAppUrl, sizeof(webAppUrl));
+    configFile.write((uint8_t*)timerDelayStr, sizeof(timerDelayStr));
+    configFile.write((uint8_t*)lineToken, sizeof(lineToken));
+    configFile.write((uint8_t*)minTempAlert, sizeof(minTempAlert));
+    configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
+    configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
+    configFile.write((uint8_t*)boardName, sizeof(boardName));
+    configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
+    configFile.close();
+  }
 }
 
 void updateDailyMinMax(float temp) {
@@ -89,6 +107,40 @@ void updateDailyMinMax(float temp) {
   }
 }
 
+
+// Web Config HTML and Handlers
+const char CONFIG_HTML[] PROGMEM = R"HTML(
+<!DOCTYPE html><html><head><title>TempBot Config</title></head><body>
+<h2>TempBot Configuration</h2>
+<form method='GET' action='/save'>
+<label>WebApp URL:</label><input name='url' value='%s'><br/>
+<label>Sync Delay (min):</label><input name='delay' value='%s'><br/>
+<label>LINE Token:</label><input name='token' value='%s'><br/>
+<label>Board Name:</label><input name='board' value='%s'><br/>
+<label>Min Temp (C):</label><input name='min_temp' value='%s'><br/>
+<label>Max Temp (C):</label><input name='max_temp' value='%s'><br/>
+<input type='submit' value='Save'>
+</form>
+</body></html>)HTML";
+
+void handleRoot(){
+  char buffer[1024];
+  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert);
+  server.send(200, "text/html", buffer);
+}
+
+void handleSave(){
+  if(server.hasArg("url")) strncpy(webAppUrl, server.arg("url").c_str(), sizeof(webAppUrl)-1);
+  if(server.hasArg("delay")) strncpy(timerDelayStr, server.arg("delay").c_str(), sizeof(timerDelayStr)-1);
+  if(server.hasArg("token")) strncpy(lineToken, server.arg("token").c_str(), sizeof(lineToken)-1);
+  if(server.hasArg("board")) strncpy(boardName, server.arg("board").c_str(), sizeof(boardName)-1);
+  if(server.hasArg("min_temp")) strncpy(minTempAlert, server.arg("min_temp").c_str(), sizeof(minTempAlert)-1);
+  if(server.hasArg("max_temp")) strncpy(maxTempAlert, server.arg("max_temp").c_str(), sizeof(maxTempAlert)-1);
+  saveConfig();
+  server.send(200, "text/plain", "Config saved, rebooting...");
+  delay(500);
+  ESP.restart();
+}
 
 String getBoardIdentifier() {
   String bName = String(boardName);
@@ -818,6 +870,24 @@ void setup() {
     currentStatus = "CONNECTED";
   }
 
+  // Register web config handlers
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/save", HTTP_GET, handleSave);
+  server.begin();
+  Serial.print("Web config server started at ");
+  Serial.println(WiFi.localIP());
+
+  // Show IP on OLED for a few seconds
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0, 0);
+  display.println("IP Address:");
+  display.println(WiFi.localIP());
+  display.display();
+  delay(3000);
+  display.clearDisplay();
+
   // ดึงค่าใหม่และบันทึกลงใน LittleFS
   if (custom_url.getValue()[0] != '\0') {
     strncpy(webAppUrl, custom_url.getValue(), sizeof(webAppUrl));
@@ -869,6 +939,15 @@ void setup() {
 // --- 7. Loop ---
 void loop() {
   ArduinoOTA.handle();
+  server.handleClient();
+  // If Wi-Fi just came back up and we have buffered entries, flush them
+  if (WiFi.status() == WL_CONNECTED) {
+    int qs = getQueueSize();
+    if (qs > 0) {
+      Serial.print("Flushing offline queue of "); Serial.print(qs); Serial.println(" entries after reconnection");
+      flushQueue();
+    }
+  }
   
   // ตรวจสอบการกดปุ่ม Flash (GPIO 0)
   // กดแล้วปล่อยภายใน 2 วินาที → เปิด Config Portal (ไม่ล้าง WiFi)
