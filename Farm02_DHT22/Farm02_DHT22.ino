@@ -200,18 +200,32 @@ void updateDisplay(float temp, float humid, String status) {
   if (temp > -100 && humid >= 0) {
     updateDailyMinMax(temp, humid);
 
-    // แสดงอุณหภูมิ (Temperature) เต็มบรรทัด
-    display.setTextSize(2);
-    display.setCursor(5 + shiftX, 15 + shiftY);
-    display.print("T: ");
+    // แสดงอุณหภูมิปัจจุบัน (ขนาดใหญ่เต็มจอฝั่งซ้าย)
+    display.setTextSize(4);
+    display.setCursor(2 + shiftX, 18 + shiftY);
     display.print(temp, 1);
-    display.print(" C");
     
-    // แสดงความชื้น (Humidity) เต็มบรรทัด
-    display.setCursor(5 + shiftX, 35 + shiftY);
-    display.print("H: ");
-    display.print(humid, 1);
-    display.print(" %");
+    // แสดงความชื้น (Humidity) เป็น Bar Chart ฝั่งขวา
+    int barX = 108;
+    int barY = 22;
+    int barW = 12;
+    int barH = 30;
+    
+    // ตัวเลขความชื้นเหนือ Bar
+    display.setTextSize(1);
+    int textX = (humid >= 100) ? barX - 6 : barX - 3;
+    display.setCursor(textX + shiftX, barY - 10 + shiftY);
+    display.print((int)humid);
+    display.print("%");
+    
+    // วาดกรอบ Bar
+    display.drawRect(barX + shiftX, barY + shiftY, barW, barH, WHITE);
+    
+    // เติมแถบ Bar ตามเปอร์เซ็นต์ความชื้น
+    int fillH = (humid / 100.0) * barH;
+    if (fillH > barH) fillH = barH;
+    if (fillH < 0) fillH = 0;
+    display.fillRect(barX + shiftX, barY + barH - fillH + shiftY, barW, fillH, WHITE);
   } else {
     display.setTextSize(2);
     display.setCursor(10 + shiftX, 30 + shiftY);
