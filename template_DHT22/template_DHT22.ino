@@ -417,6 +417,11 @@ void sendData() {
   float t = dht.readTemperature();
   float h = dht.readHumidity();
 
+  // --- ปรับค่า Calibration Offset ให้ตรงกับ DS18B20 ---
+  if (!isnan(t)) {
+    t = t - 4.29; 
+  }
+
   if (isnan(t) || isnan(h)) {
     currentStatus = "SENS ERR";
     failedSyncCount++;
@@ -1090,6 +1095,11 @@ void loop() {
     // ดึงค่าอุณหภูมิและความชื้นจากเซนเซอร์ DHT22
     float t = dht.readTemperature();
     float h = dht.readHumidity();
+    
+    // --- ปรับค่า Calibration Offset ให้ตรงกับ DS18B20 ---
+    if (!isnan(t)) {
+      t = t - 4.29; 
+    }
     
     if (isnan(t) || isnan(h)) {
       currentTemp = -999;
