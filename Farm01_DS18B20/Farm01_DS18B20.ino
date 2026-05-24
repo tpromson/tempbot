@@ -48,8 +48,9 @@ unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่ม
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
 
 enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
-AlertState lastAlertState = STATE_NORMAL;
-unsigned long lastLineNotifyTime = 0;
+AlertState lastAlertState = STATE_NORMAL; // ไม่ใช้แล้ว - ย้ายไป GAS
+unsigned long lastLineNotifyTime = 0; // ไม่ใช้แล้ว - ย้ายไป GAS
+unsigned long lastSensorErrorNotifyTime = 0;
 bool isBootNotificationSent = false;
 
 float dailyMinTemp = 999.0;
@@ -470,6 +471,22 @@ void sendData() {
     Serial.println("DS18B20 ERROR - Sensor not responding!");
     currentStatus = "SENS ERR";
     failedSyncCount++;
+    
+    // แจ้งเตือน LINE ทุก 30 นาที ถ้า sensor พัง
+    unsigned long sensorErrorInterval = 3600000; // 1 ชั่วโมง (ป้องกันใช้ LINE เกินโควต้า)
+    if (millis() - lastSensorErrorNotifyTime >= sensorErrorInterval) {
+      String boardID = getBoardIdentifier();
+      String ipAddr = WiFi.localIP().toString();
+      String message = String("⚠️ [TempBot Alert]\n")
+                     + "Board: " + boardID + "\n"
+                     + "IP: " + ipAddr + "\n"
+                     + "Status: SENSOR ERROR\n"
+                     + "DS18B20 not responding!\n"
+                     + "Auto reboot after 10 failed attempts";
+      sendLineNotify(message);
+      lastSensorErrorNotifyTime = millis();
+    }
+    
     if (failedSyncCount >= 10) {
       playAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
@@ -645,6 +662,9 @@ void sendLineNotify(String message) {
 }
 
 void checkLineAlerts(float temp) {
+  // ปิดใช้งาน - ย้ายไป GAS แล้ว
+  return;
+  
   if (lineToken[0] == '\0' || lineGroupId[0] == '\0') return;
 
   float minT = atof(minTempAlert);
@@ -1198,10 +1218,10 @@ void loop() {
       
       updateDisplay(currentTemp, currentStatus);
       
-      // ตรวจสอบสถานะและแจ้งเตือน Line Notify
-      if (currentTemp != DEVICE_DISCONNECTED_C && currentTemp > -50) {
-        checkLineAlerts(currentTemp);
-      }
+      // ตรวจสอบสถานะและแจ้งเตือน Line Notify (ย้ายไป GAS แล้ว - ปิดใช้งาน)
+      // if (currentTemp != DEVICE_DISCONNECTED_C && currentTemp > -50) {
+      //   checkLineAlerts(currentTemp);
+      // }
       
       isConversionRequestIssued = false; // รีเซ็ตสถานะเพื่อรอรอบถัดไป
       lastUpdate = currentMillis;

@@ -42,6 +42,8 @@ char maxTempAlert[10] = "35.0";
 char minHumidAlert[10] = "30.0";
 char maxHumidAlert[10] = "80.0";
 char boardName[32] = "";     // Custom Board Name (เช่น Kitchen, ServerRoom)
+char bitmapName[20] = "cat"; // Bitmap set: cat, chicken, fish, tree
+char staticIP[16] = "";        // Static IP (empty = DHCP)
 char otaPassword[32] = "";   // ArduinoOTA update password
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
@@ -50,6 +52,7 @@ int failedSyncCount = 0;            // นับจำนวนครั้ง�
 enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
 AlertState lastAlertState = STATE_NORMAL;
 unsigned long lastLineNotifyTime = 0;
+unsigned long lastSensorErrorNotifyTime = 0;
 AlertState lastHumidAlertState = STATE_NORMAL;
 unsigned long lastHumidLineNotifyTime = 0;
 bool isBootNotificationSent = false;
@@ -87,6 +90,8 @@ void saveConfig() {
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
     configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
     configFile.write((uint8_t*)boardName, sizeof(boardName));
+    configFile.write((uint8_t*)bitmapName, sizeof(bitmapName));
+    configFile.write((uint8_t*)staticIP, sizeof(staticIP));
     configFile.write((uint8_t*)minHumidAlert, sizeof(minHumidAlert));
     configFile.write((uint8_t*)maxHumidAlert, sizeof(maxHumidAlert));
     configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
@@ -132,6 +137,8 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 <label>Max Temp (C):</label><input name='max_temp' value='%s'><br/>
 <label>Min Humid (%):</label><input name='min_humid' value='%s'><br/>
 <label>Max Humid (%):</label><input name='max_humid' value='%s'><br/>
+<label>OTA Password:</label><input name='ota_pass' value='%s'><br/>
+<label>Static IP:</label><input name='static_ip' value='%s' placeholder='DHCP if empty'><br/>
 <input type='submit' value='Save'>
 </form>
 </body></html>
@@ -139,7 +146,7 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 
 void handleRoot(){
   char buffer[1024];
-  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert, minHumidAlert, maxHumidAlert);
+  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert, minHumidAlert, maxHumidAlert, otaPassword, staticIP);
   server.send(200, "text/html", buffer);
 }
 
@@ -152,6 +159,8 @@ void handleSave(){
   if(server.hasArg("max_temp")) strncpy(maxTempAlert, server.arg("max_temp").c_str(), sizeof(maxTempAlert)-1);
   if(server.hasArg("min_humid")) strncpy(minHumidAlert, server.arg("min_humid").c_str(), sizeof(minHumidAlert)-1);
   if(server.hasArg("max_humid")) strncpy(maxHumidAlert, server.arg("max_humid").c_str(), sizeof(maxHumidAlert)-1);
+  if(server.hasArg("ota_pass")) strncpy(otaPassword, server.arg("ota_pass").c_str(), sizeof(otaPassword)-1);
+  if(server.hasArg("static_ip")) strncpy(staticIP, server.arg("static_ip").c_str(), sizeof(staticIP)-1);
   // Save updated config to LittleFS
   saveConfig();
   server.send(200, "text/plain", "Config saved, rebooting...");
@@ -196,11 +205,11 @@ void showOnDisplay(String title, String msg, float temp = -999) {
   display.display();
 }
 
-void playCatAnimation(int repetitions, String message) {
+void playAnimation(int repetitions, String message) {
   for (int i = 0; i < repetitions; i++) {
-    for (int f = 0; f < FRAME_COUNT; f++) {
+    for (int f = 0; f < currentFrameCount; f++) {
       display.clearDisplay();
-      display.drawBitmap(32, 0, frames[f], FRAME_WIDTH, FRAME_HEIGHT, WHITE);
+      display.drawBitmap(32, 0, currentFrames[f], FRAME_WIDTH, FRAME_HEIGHT, WHITE);
       display.setTextSize(1);
       display.setTextColor(WHITE);
       
@@ -499,8 +508,24 @@ void sendData() {
   if (isnan(t) || isnan(h)) {
     currentStatus = "SENS ERR";
     failedSyncCount++;
+    
+    // แจ้งเตือน LINE ทุก 1 ชั่วโมง ถ้า sensor พัง
+    unsigned long sensorErrorInterval = 3600000; // 1 ชั่วโมง (ป้องกันใช้ LINE เกินโควต้า)
+    if (millis() - lastSensorErrorNotifyTime >= sensorErrorInterval) {
+      String boardID = getBoardIdentifier();
+      String ipAddr = WiFi.localIP().toString();
+      String message = String("⚠️ [TempBot Alert]\n")
+                   + "Board: " + boardID + "\n"
+                   + "IP: " + ipAddr + "\n"
+                   + "Status: SENSOR ERROR\n"
+                   + "DHT22 not responding!\n"
+                   + "Auto reboot after 10 failed attempts";
+      sendLineNotify(message);
+      lastSensorErrorNotifyTime = millis();
+    }
+    
     if (failedSyncCount >= 10) {
-      playCatAnimation(2, "WATCHDOG REBOOT");
+      playAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
     return;
@@ -515,7 +540,7 @@ void sendData() {
     currentStatus = "BUFFERED:" + String(qs);
     failedSyncCount++;
     if (failedSyncCount >= 10) {
-      playCatAnimation(2, "WATCHDOG REBOOT");
+      playAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
     return;
@@ -569,6 +594,19 @@ void sendData() {
               minStr.toCharArray(minTempAlert, 10);
             }
           }
+          // ดึง bitmap จาก GAS
+          int bitmapPos = payload.indexOf("\"bitmap\":");
+          if (bitmapPos != -1) {
+            int endPos = payload.indexOf("\"", bitmapPos + 9);
+            if (endPos == -1) endPos = payload.indexOf("}", bitmapPos);
+            String bitmapStr = payload.substring(bitmapPos + 9, endPos);
+            bitmapStr.trim();
+            if (bitmapStr.length() > 0 && bitmapStr.length() < 20) {
+              bitmapStr.toCharArray(bitmapName, 20);
+              Serial.print("Bitmap updated from GAS: ");
+              Serial.println(bitmapName);
+            }
+          }
           Serial.println("Settings updated from GAS");
         }
         http.end();
@@ -585,7 +623,7 @@ void sendData() {
     failedSyncCount++;
     Serial.print("Watchdog: Failed sync count = "); Serial.println(failedSyncCount);
     if (failedSyncCount >= 10) {
-      playCatAnimation(2, "WATCHDOG REBOOT");
+      playAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
   } else {
@@ -652,6 +690,9 @@ void sendLineNotify(String message) {
 }
 
 void checkLineAlerts(float temp, float humid) {
+  // ปิดใช้งาน - ย้ายไป GAS แล้ว
+  return;
+  
   if (lineToken[0] == '\0' || lineGroupId[0] == '\0') return;
 
   float minT = atof(minTempAlert);
@@ -780,7 +821,7 @@ void checkWiFiConnection() {
 void openConfigPortal() {
   currentStatus = "CONFIG MODE";
   updateDisplay(currentTemp, currentHumid, currentStatus);
-  playCatAnimation(1, "CONFIG MODE");
+  playAnimation(1, "CONFIG MODE");
 
   WiFiManager wm;
 
@@ -795,6 +836,7 @@ void openConfigPortal() {
   WiFiManagerParameter custom_max_humid("max_humid", "Max Humid Alert (%)", maxHumidAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
   WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
+  WiFiManagerParameter custom_static_ip("static_ip", "Static IP (e.g. 192.168.0.150)", staticIP, 16);
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -806,6 +848,7 @@ void openConfigPortal() {
   wm.addParameter(&custom_max_humid);
   wm.addParameter(&custom_board_name);
   wm.addParameter(&custom_ota_password);
+  wm.addParameter(&custom_static_ip);
 
   wm.setConfigPortalTimeout(120); // ปิด portal อัตโนมัติใน 2 นาที
 
@@ -837,7 +880,7 @@ void openConfigPortal() {
   // บันทึกลง LittleFS
   saveConfig();
 
-  playCatAnimation(1, "RESTARTING...");
+  playAnimation(1, "RESTARTING...");
   delay(500);
   ESP.restart();
 }
@@ -861,18 +904,20 @@ void setup() {
         size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
-        if (fileSize >= 504) {
-          // รูปแบบใหม่ล่าสุด: มี otaPassword
+        if (fileSize >= 540) {
+          // รูปแบบใหม่ล่าสุด: มี bitmapName + staticIP
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           configFile.readBytes(lineGroupId, sizeof(lineGroupId));
           configFile.readBytes(boardName, sizeof(boardName));
+          configFile.readBytes(bitmapName, sizeof(bitmapName));
+          configFile.readBytes(staticIP, sizeof(staticIP));
           configFile.readBytes(minHumidAlert, sizeof(minHumidAlert));
           configFile.readBytes(maxHumidAlert, sizeof(maxHumidAlert));
           configFile.readBytes(otaPassword, sizeof(otaPassword));
         } else if (fileSize >= 472) {
-          // รูปแบบที่มีความชื้นและ boardName แต่ไม่มี otaPassword
+          // รูปแบบที่มีความชื้นและ boardName แต่ไม่มี bitmapName/staticIP/otaPassword
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
@@ -880,6 +925,8 @@ void setup() {
           configFile.readBytes(boardName, sizeof(boardName));
           configFile.readBytes(minHumidAlert, sizeof(minHumidAlert));
           configFile.readBytes(maxHumidAlert, sizeof(maxHumidAlert));
+          bitmapName[0] = '\0';
+          staticIP[0] = '\0';
           otaPassword[0] = '\0';
         } else if (fileSize >= 452) {
           // รูปแบบที่มี boardName แต่ไม่มีความชื้น
@@ -974,7 +1021,7 @@ void setup() {
   
   // display.dim(true); // เปิดโหมดประหยัดหน้าจอ (Dim Screen) ยืดอายุหน้าจอ OLED (บางบอร์ดโคลนอาจจะจอดับเมื่อเปิดใช้บรรทัดนี้ ให้ปิดไว้เป็นค่าเริ่มต้น)
   display.clearDisplay();
-  playCatAnimation(1, "BOOTING...");
+  playAnimation(1, "BOOTING...");
 
   WiFiManager wm;
 
@@ -989,6 +1036,7 @@ void setup() {
   WiFiManagerParameter custom_max_humid("max_humid", "Max Humid Alert (%)", maxHumidAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
   WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
+  WiFiManagerParameter custom_static_ip("static_ip", "Static IP (e.g. 192.168.0.150)", staticIP, 16);
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -1000,10 +1048,23 @@ void setup() {
   wm.addParameter(&custom_max_humid);
   wm.addParameter(&custom_board_name);
   wm.addParameter(&custom_ota_password);
+  wm.addParameter(&custom_static_ip);
   
   // ตั้งค่า Config ของ WiFiManager ให้เหมาะกับการจัดการตอนไฟตก
   wm.setConfigPortalTimeout(120); // ถ้าผ่านไป 2 นาทีไม่มีคนมาต่อ AP เพื่อตั้งค่า ให้หลุดจาก setup ไปทำ loop ต่อ (สำคัญมากตอนไฟดับแล้วเราไม่อยู่บ้าน)
   wm.setConnectTimeout(15);       // พยายามต่อกับเร้าเตอร์เดิมตัวละ 15 วินาที
+  
+  // ถ้ามี staticIP ที่ตั้งไว้ ตั้งค่า Static IP ก่อน connect
+  if (strlen(staticIP) > 0) {
+    IPAddress ip, gateway, subnet;
+    if (ip.fromString(staticIP)) {
+      gateway.fromString("192.168.0.1");
+      subnet.fromString("255.255.255.0");
+      wm.setSTAStaticIPConfig(ip, gateway, subnet);
+      Serial.print("Static IP configured: ");
+      Serial.println(staticIP);
+    }
+  }
   
   String boardID = "ESP8266_" + String(ESP.getChipId(), HEX);
   boardID.toUpperCase();
@@ -1015,7 +1076,7 @@ void setup() {
     Serial.println("Failed to connect or hit timeout. Continuing to loop...");
     currentStatus = "WIFI TIMEOUT";
   } else {
-    playCatAnimation(1, "WIFI OK!");
+    playAnimation(1, "WIFI OK!");
     currentStatus = "CONNECTED";
   }
   // Register web config handlers
@@ -1073,6 +1134,7 @@ void setup() {
   }
 
   configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  setBitmap(bitmapName);
   ArduinoOTA.setHostname(boardID.c_str());
   if (otaPassword[0] != '\0') {
     ArduinoOTA.setPassword(otaPassword);
@@ -1081,7 +1143,11 @@ void setup() {
     Serial.println("ArduinoOTA: Unprotected.");
   }
   ArduinoOTA.begin();
-
+  Serial.print("OTA ready! IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.print("OTA port: 8266, Hostname: ");
+  Serial.println(boardID.c_str());
+  
   if (WiFi.status() == WL_CONNECTED) {
     sendData();
   }
@@ -1117,7 +1183,7 @@ void loop() {
     if (holdTime >= 5000 && !flashActionTaken) {
       // ค้างครบ 5 วินาที → Factory Reset
       flashActionTaken = true;
-      playCatAnimation(2, "FACTORY RESET");
+      playAnimation(2, "FACTORY RESET");
       WiFiManager wm;
       wm.resetSettings();
       if (LittleFS.begin()) {
@@ -1199,9 +1265,9 @@ void loop() {
   // 1. จัดการส่งข้อมูลไป Google Sheets (ทุก 30 นาที)
   if (currentMillis - lastTime >= timerDelay) {
     if (WiFi.status() == WL_CONNECTED) {
-      playCatAnimation(1, "SENDING DATA"); 
+      playAnimation(1, "SENDING DATA"); 
       sendData();
-      playCatAnimation(1, "DONE!");
+      playAnimation(1, "DONE!");
       lastTime = currentMillis; // รีเซ็ตเฉพาะเมื่อ WiFi ต่ออยู่และส่งได้
     }
     // ถ้า WiFi ยังไม่ต่อ จะ loop กลับมาลองส่งใหม่ทันทีในรอบถัดไป
@@ -1251,10 +1317,10 @@ void loop() {
     
     updateDisplay(currentTemp, currentHumid, currentStatus);
     
-    // ตรวจสอบสถานะและแจ้งเตือน Line Notify
-    if (currentTemp > -50 && currentTemp != -999) {
-      checkLineAlerts(currentTemp, currentHumid);
-    }
+    // ตรวจสอบสถานะและแจ้งเตือน Line Notify (ย้ายไป GAS แล้ว - ปิดใช้งาน)
+    // if (currentTemp > -50 && currentTemp != -999) {
+    //   checkLineAlerts(currentTemp, currentHumid);
+    // }
     
     lastUpdate = currentMillis;
   }

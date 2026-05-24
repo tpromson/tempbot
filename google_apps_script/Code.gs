@@ -44,7 +44,7 @@ var SETTINGS_SHEET  = "Settings";
 
 var QUICK_REPLY_ITEMS = [
   { label: "🌡️ ล่าสุด", text: "temp" },
-  { label: "📊 สถานะ", text: "status" },
+  { label: "⚙️ ตั้งค่า", text: "ดูค่า" },
   { label: "📈 สรุป", text: "สรุป" },
   { label: "❓ ช่วย", text: "help" }
 ];
@@ -127,11 +127,8 @@ function doGet(e) {
     formatLastRow(sheet, isQueued);
     if (MAX_ROWS > 0) trimOldRows(sheet);
 
-    // ESP ขอดึงค่า threshold
-    if (e.parameter.get_settings === "1") {
-      var thresholds = getThresholds(boardId.trim());
-      return respond(JSON.stringify(thresholds));
-    }
+    // ตรวจสอบ threshold และส่ง LINE notify ถ้าเกินค่าตั้ง
+    checkAndNotify(boardId.trim(), tempVal, humidVal);
 
     return respond("OK");
 
@@ -815,6 +812,8 @@ function getThresholds(boardId) {
   var result = {
     maxTemp: DEFAULT_THRESHOLDS.maxTemp,
     minTemp: DEFAULT_THRESHOLDS.minTemp,
+    maxHumid: 80.0,
+    minHumid: 30.0,
     bitmap: DEFAULT_BITMAP
   };
   
@@ -900,12 +899,140 @@ function trimOldRows(sheet) {
 }
 
 // ============================================================
-// Helper: HTTP Response
+// checkAndNotify: ตรวจสอบ threshold และส่ง LINE notify
 // ============================================================
-function respond(message) {
-  return ContentService
-    .createTextOutput(message)
-    .setMimeType(ContentService.MimeType.TEXT);
+var ALERT_COOLDOWN_MS = 1800000; // 30 นาที
+var HYSTERESIS_TEMP = 0.5;
+var HYSTERESIS_HUMID = 2.0;
+
+function checkAndNotify(boardId, temp, humid) {
+  var props = PropertiesService.getScriptProperties();
+  var thresholds = getThresholds(boardId);
+  
+  var minT = thresholds.minTemp;
+  var maxT = thresholds.maxTemp;
+  var minH = thresholds.minHumid;
+  var maxH = thresholds.maxHumid;
+  
+  var now = new Date().getTime();
+  
+  // อ่านสถานะล่าสุดของบอร์ด
+  var lastStateKey = "LAST_ALERT_STATE_" + boardId;
+  var lastTimeKey = "LAST_NOTIFY_TIME_" + boardId;
+  var lastTempStateKey = "LAST_TEMP_STATE_" + boardId;
+  var lastHumidStateKey = "LAST_HUMID_STATE_" + boardId;
+  
+  var lastState = props.getProperty(lastStateKey) || "NORMAL";
+  var lastNotifyTime = parseInt(props.getProperty(lastTimeKey) || "0");
+  var lastTempState = props.getProperty(lastTempStateKey) || "NORMAL";
+  var lastHumidState = props.getProperty(lastHumidStateKey) || "NORMAL";
+  
+  // กำหนดสถานะใหม่
+  var newTempState = "NORMAL";
+  if (temp <= minT && temp > -50) {
+    newTempState = "LOW";
+  } else if (temp >= maxT) {
+    newTempState = "HIGH";
+  } else {
+    if (lastTempState === "LOW" && temp < minT + HYSTERESIS_TEMP) {
+      newTempState = "LOW";
+    } else if (lastTempState === "HIGH" && temp > maxT - HYSTERESIS_TEMP) {
+      newTempState = "HIGH";
+    }
+  }
+  
+  var newHumidState = "NORMAL";
+  // DS18B20 ไม่มีความชื้น (humid = 0) ข้ามการตรวจสอบความชื้น
+  if (humid > 0) {
+    if (humid <= minH) {
+      newHumidState = "LOW";
+    } else if (humid >= maxH) {
+      newHumidState = "HIGH";
+    } else {
+      if (lastHumidState === "LOW" && humid < minH + HYSTERESIS_HUMID) {
+        newHumidState = "LOW";
+      } else if (lastHumidState === "HIGH" && humid > maxH - HYSTERESIS_HUMID) {
+        newHumidState = "HIGH";
+      }
+    }
+  }
+  
+  // สร้างข้อความแจ้งเตือน
+  var messages = [];
+  var newState = "NORMAL";
+  
+  if (newTempState !== "NORMAL") {
+    if (newTempState === "LOW") {
+      messages.push("⚠️ แจ้งเตือน: อุณหภูมิต่ำกว่าค่าตั้ง\n🌡️ อุณหภูมิปัจจุบัน: " + temp.toFixed(1) + " °C\n📉 ค่าต่ำสุด: " + minT + " °C\n📟 บอร์ด: " + boardId);
+    } else {
+      messages.push("⚠️ แจ้งเตือน: อุณหภูมิสูงกว่าค่าตั้ง\n🌡️ อุณหภูมิปัจจุบัน: " + temp.toFixed(1) + " °C\n📈 ค่าสูงสุด: " + maxT + " °C\n📟 บอร์ด: " + boardId);
+    }
+    newState = "ALERT";
+  }
+  
+  if (newHumidState !== "NORMAL") {
+    if (newHumidState === "LOW") {
+      messages.push("⚠️ แจ้งเตือน: ความชื้นต่ำกว่าค่าตั้ง\n💧 ความชื้นปัจจุบัน: " + humid.toFixed(1) + " %\n📉 ค่าต่ำสุด: " + minH + " %\n📟 บอร์ด: " + boardId);
+    } else {
+      messages.push("⚠️ แจ้งเตือน: ความชื้นสูงกว่าค่าตั้ง\n💧 ความชื้นปัจจุบัน: " + humid.toFixed(1) + " %\n📈 ค่าสูงสุด: " + maxH + " %\n📟 บอร์ด: " + boardId);
+    }
+    newState = "ALERT";
+  }
+  
+  // ถ้ากลับมาปกติ
+  if (newTempState === "NORMAL" && newHumidState === "NORMAL" && (lastTempState !== "NORMAL" || lastHumidState !== "NORMAL")) {
+    messages.push("✅ กลับมาปกติแล้ว\n🌡️ " + temp.toFixed(1) + " °C  |  💧 " + humid.toFixed(1) + " %\n📟 บอร์ด: " + boardId);
+    newState = "NORMAL";
+  }
+  
+  // ตรวจสอบว่าต้องส่งหรือไม่
+  var shouldSend = false;
+  if (messages.length > 0) {
+    if (newState !== lastState) {
+      shouldSend = true; // เปลี่ยนสถานะ = ส่งทันที
+    } else if (newState !== "NORMAL" && (now - lastNotifyTime) >= ALERT_COOLDOWN_MS) {
+      shouldSend = true; // ยังอยู่ในสถานะเดิม + เกิน cooldown
+    }
+  }
+  
+  if (shouldSend && messages.length > 0) {
+    // ดึง targetId จากครั้งก่อนที่มีคนส่งข้อความมา
+    var targetId = props.getProperty("LINE_TARGET_ID");
+    var token = props.getProperty("LINE_TOKEN");
+    
+    if (targetId && token && messages.length > 0) {
+      for (var i = 0; i < messages.length; i++) {
+        pushNotifyToLine(targetId, messages[i], token);
+        Utilities.sleep(500);
+      }
+      props.setProperty(lastTimeKey, now.toString());
+    }
+  }
+  
+  // บันทึกสถานะ
+  props.setProperty(lastStateKey, newState);
+  props.setProperty(lastTempStateKey, newTempState);
+  props.setProperty(lastHumidStateKey, newHumidState);
+}
+
+function pushNotifyToLine(targetId, message, token) {
+  var options = {
+    method: "POST",
+    contentType: "application/json",
+    headers: { "Authorization": "Bearer " + token },
+    payload: JSON.stringify({
+      to: targetId,
+      messages: [{ type: "text", text: message }]
+    }),
+    muteHttpExceptions: true
+  };
+  
+  try {
+    var res = UrlFetchApp.fetch(LINE_PUSH_URL, options);
+    Logger.log("LINE Notify: " + res.getResponseCode() + " - " + message.substring(0, 50));
+  } catch (e) {
+    Logger.log("LINE Notify error: " + e.toString());
+  }
 }
 
 // ============================================================
