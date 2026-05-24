@@ -40,6 +40,7 @@ char lineGroupId[40] = "";   // LINE Group ID (เช่น C1234abcd...)
 char minTempAlert[10] = "20.0";
 char maxTempAlert[10] = "35.0";
 char boardName[32] = "";     // Custom Board Name (เช่น Kitchen, ServerRoom)
+char bitmapName[20] = "cat"; // Bitmap set: cat, chicken, fish, tree
 char otaPassword[32] = "";   // ArduinoOTA update password
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
@@ -81,6 +82,7 @@ void saveConfig() {
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
     configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
     configFile.write((uint8_t*)boardName, sizeof(boardName));
+    configFile.write((uint8_t*)bitmapName, sizeof(bitmapName));
     configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
     configFile.close();
   }
@@ -188,7 +190,7 @@ void showOnDisplay(String title, String msg, float temp = -999) {
   display.display();
 }
 
-void playCatAnimation(int repetitions, String message) {
+void playAnimation(int repetitions, String message) {
   for (int i = 0; i < repetitions; i++) {
     for (int f = 0; f < FRAME_COUNT; f++) {
       display.clearDisplay();
@@ -463,7 +465,7 @@ void sendData() {
     currentStatus = "SENS ERR";
     failedSyncCount++;
     if (failedSyncCount >= 10) {
-      playCatAnimation(2, "WATCHDOG REBOOT");
+      playAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
     return;
@@ -479,7 +481,7 @@ void sendData() {
     currentStatus = "BUFFERED:" + String(qs);
     failedSyncCount++;
     if (failedSyncCount >= 10) {
-      playCatAnimation(2, "WATCHDOG REBOOT");
+      playAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
     return;
@@ -506,14 +508,15 @@ void sendData() {
       syncSuccess = true;
       lastSyncTimeEpoch = time(nullptr);
       
-      // ดึง threshold จาก GAS
+      // ดึง threshold และ bitmap จาก GAS
       String settingsUrl = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(boardID);
       if (http.begin(client, settingsUrl)) {
         int settingsCode = http.GET();
         if (settingsCode == 200) {
           String payload = http.getString();
+          
+          // Parse maxTemp
           int maxPos = payload.indexOf("\"maxTemp\":");
-          int minPos = payload.indexOf("\"minTemp\":");
           if (maxPos != -1) {
             int endPos = payload.indexOf(",", maxPos);
             if (endPos == -1) endPos = payload.indexOf("}", maxPos);
@@ -524,14 +527,34 @@ void sendData() {
               saveConfig();
             }
           }
+          
+          // Parse minTemp
+          int minPos = payload.indexOf("\"minTemp\":");
           if (minPos != -1) {
-            int endPos = payload.indexOf("}", minPos);
+            int endPos = payload.indexOf(",", minPos);
+            if (endPos == -1) endPos = payload.indexOf("}", minPos);
             String minStr = payload.substring(minPos + 9, endPos);
             minStr.trim();
             if (minStr.length() > 0) {
               minStr.toCharArray(minTempAlert, 10);
             }
           }
+          
+          // Parse bitmap
+          int bmpPos = payload.indexOf("\"bitmap\":");
+          if (bmpPos != -1) {
+            int endPos = payload.indexOf(",", bmpPos);
+            if (endPos == -1) endPos = payload.indexOf("}", bmpPos);
+            String bmpStr = payload.substring(bmpPos + 9, endPos);
+            bmpStr.trim();
+            bmpStr.replace("\"", "");
+            if (bmpStr.length() > 0 && bmpStr.length() < 20) {
+              bmpStr.toCharArray(bitmapName, 20);
+              setBitmap(bitmapName);
+              saveConfig();
+            }
+          }
+          
           Serial.println("Settings updated from GAS");
         }
         http.end();
@@ -548,7 +571,7 @@ void sendData() {
     failedSyncCount++;
     Serial.print("Watchdog: Failed sync count = "); Serial.println(failedSyncCount);
     if (failedSyncCount >= 10) {
-      playCatAnimation(2, "WATCHDOG REBOOT");
+      playAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
   } else {
@@ -695,7 +718,7 @@ void checkWiFiConnection() {
 void openConfigPortal() {
   currentStatus = "CONFIG MODE";
   updateDisplay(currentTemp, currentStatus);
-  playCatAnimation(1, "CONFIG MODE");
+  playAnimation(1, "CONFIG MODE");
 
   WiFiManager wm;
 
@@ -758,7 +781,7 @@ void openConfigPortal() {
     Serial.println("Config saved after portal.");
   }
 
-  playCatAnimation(1, "RESTARTING...");
+  playAnimation(1, "RESTARTING...");
   delay(500);
   ESP.restart();
 }
@@ -789,14 +812,16 @@ void setup() {
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           configFile.readBytes(lineGroupId, sizeof(lineGroupId));
           configFile.readBytes(boardName, sizeof(boardName));
+          configFile.readBytes(bitmapName, sizeof(bitmapName));
           configFile.readBytes(otaPassword, sizeof(otaPassword));
-        } else if (fileSize >= 452) {
+        } else if (fileSize >= 464) {
           // รูปแบบที่มี boardName แต่ไม่มี otaPassword
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           configFile.readBytes(lineGroupId, sizeof(lineGroupId));
           configFile.readBytes(boardName, sizeof(boardName));
+          bitmapName[0] = '\0';
           otaPassword[0] = '\0';
         } else if (fileSize >= 420) {
           // รูปแบบใหม่: lineToken 200 bytes + lineGroupId 40 bytes
@@ -875,7 +900,7 @@ void setup() {
   
   // display.dim(true); // เปิดโหมดประหยัดหน้าจอ (Dim Screen) ยืดอายุหน้าจอ OLED (บางบอร์ดโคลนอาจจะจอดับเมื่อเปิดใช้บรรทัดนี้ ให้ปิดไว้เป็นค่าเริ่มต้น)
   display.clearDisplay();
-  playCatAnimation(1, "BOOTING...");
+  playAnimation(1, "BOOTING...");
 
   WiFiManager wm;
 
@@ -912,7 +937,7 @@ void setup() {
     Serial.println("Failed to connect or hit timeout. Continuing to loop...");
     currentStatus = "WIFI TIMEOUT";
   } else {
-    playCatAnimation(1, "WIFI OK!");
+    playAnimation(1, "WIFI OK!");
     currentStatus = "CONNECTED";
   }
 
@@ -967,6 +992,10 @@ void setup() {
   }
 
   configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  
+  // โหลด bitmap จาก config
+  setBitmap(bitmapName);
+  
   ArduinoOTA.setHostname(boardID.c_str());
   if (otaPassword[0] != '\0') {
     ArduinoOTA.setPassword(otaPassword);
@@ -1011,7 +1040,7 @@ void loop() {
     if (holdTime >= 5000 && !flashActionTaken) {
       // ค้างครบ 5 วินาที → Factory Reset
       flashActionTaken = true;
-      playCatAnimation(2, "FACTORY RESET");
+      playAnimation(2, "FACTORY RESET");
       WiFiManager wm;
       wm.resetSettings();
       if (LittleFS.begin()) {
@@ -1093,9 +1122,9 @@ void loop() {
   // 1. จัดการส่งข้อมูลไป Google Sheets (ทุก 30 นาที)
   if (currentMillis - lastTime >= timerDelay) {
     if (WiFi.status() == WL_CONNECTED) {
-      playCatAnimation(1, "SENDING DATA"); 
+      playAnimation(1, "SENDING DATA"); 
       sendData();
-      playCatAnimation(1, "DONE!");
+      playAnimation(1, "DONE!");
       lastTime = currentMillis; // รีเซ็ตเฉพาะเมื่อ WiFi ต่ออยู่และส่งได้
     }
     // ถ้า WiFi ยังไม่ต่อ จะ loop กลับมาลองส่งใหม่ทันทีในรอบถัดไป

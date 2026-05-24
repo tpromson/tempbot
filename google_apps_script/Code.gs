@@ -54,6 +54,8 @@ var DEFAULT_THRESHOLDS = {
   minTemp: 20.0
 };
 
+var DEFAULT_BITMAP = "cat";
+
 // ============================================================
 // doGet: รับข้อมูลจาก ESP8266
 // ?temperature=28.5&humidity=65.2&board_id=BOARD_A1B2C3[&queued=1]
@@ -65,6 +67,15 @@ function doGet(e) {
     var boardId        = e.parameter.board_id;
     var isQueued       = (e.parameter.queued === "1");
     var timestampParam = e.parameter.timestamp;
+
+    // ถ้าขอดึงค่า settings ให้ return JSON กลับไป
+    if (e.parameter.get_settings === "1") {
+      if (!boardId || boardId.trim() === "") {
+        return respond("ERROR: Missing board_id");
+      }
+      var thresholds = getThresholds(boardId.trim());
+      return respond(JSON.stringify(thresholds));
+    }
 
     if (!temperature) {
       return respond("ERROR: Missing temperature");
@@ -783,18 +794,19 @@ function getSettingsSheet() {
   var sheet = ss.getSheetByName(SETTINGS_SHEET);
   if (!sheet) {
     sheet = ss.insertSheet(SETTINGS_SHEET);
-    sheet.appendRow(["Board ID", "Max Temp (°C)", "Min Temp (°C)", "Updated"]);
-    sheet.getRange(1, 1, 1, 4).setBackground("#1a73e8").setFontColor("#ffffff").setFontWeight("bold");
+    sheet.appendRow(["Board ID", "Max Temp (°C)", "Min Temp (°C)", "Bitmap", "Updated"]);
+    sheet.getRange(1, 1, 1, 5).setBackground("#1a73e8").setFontColor("#ffffff").setFontWeight("bold");
     sheet.setColumnWidth(1, 150);
     sheet.setColumnWidth(2, 120);
     sheet.setColumnWidth(3, 120);
-    sheet.setColumnWidth(4, 160);
+    sheet.setColumnWidth(4, 100);
+    sheet.setColumnWidth(5, 160);
   }
   return sheet;
 }
 
 // ============================================================
-// Helper: ดึง threshold ของบอร์ด
+// Helper: ดึง threshold และ bitmap ของบอร์ด
 // ============================================================
 function getThresholds(boardId) {
   var sheet = getSettingsSheet();
@@ -802,7 +814,8 @@ function getThresholds(boardId) {
   
   var result = {
     maxTemp: DEFAULT_THRESHOLDS.maxTemp,
-    minTemp: DEFAULT_THRESHOLDS.minTemp
+    minTemp: DEFAULT_THRESHOLDS.minTemp,
+    bitmap: DEFAULT_BITMAP
   };
   
   // หาค่าเฉพาะของบอร์ด
@@ -811,6 +824,7 @@ function getThresholds(boardId) {
     if (rowBoardId === boardId) {
       if (data[i][1] !== "") result.maxTemp = parseFloat(data[i][1]);
       if (data[i][2] !== "") result.minTemp = parseFloat(data[i][2]);
+      if (data[i][3] !== "") result.bitmap = String(data[i][3]).trim();
       break;
     }
   }
@@ -819,9 +833,9 @@ function getThresholds(boardId) {
 }
 
 // ============================================================
-// Helper: บันทึก threshold
+// Helper: บันทึก threshold และ bitmap
 // ============================================================
-function saveThreshold(boardId, maxTemp, minTemp) {
+function saveThreshold(boardId, maxTemp, minTemp, bitmap) {
   var sheet = getSettingsSheet();
   var data = sheet.getDataRange().getValues();
   var now = new Date();
@@ -878,8 +892,10 @@ function formatLastRow(sheet, isQueued) {
 // ============================================================
 function trimOldRows(sheet) {
   var totalRows = sheet.getLastRow();
-  if (totalRows > MAX_ROWS + 1) {
-    sheet.deleteRows(2, totalRows - MAX_ROWS - 1);
+  if (totalRows > (MAX_ROWS + 1)) {
+    var rowsToDelete = totalRows - MAX_ROWS - 1;
+    sheet.deleteRows(2, rowsToDelete);
+    Logger.log("ระบบได้ลบข้อมูลเก่าที่เกินกำหนดออกแล้ว จำนวน " + rowsToDelete + " แถว");
   }
 }
 
