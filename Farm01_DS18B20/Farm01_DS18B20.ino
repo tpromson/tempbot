@@ -455,7 +455,11 @@ void sendData() {
   delay(750); // รอ DS18B20 แปลงค่า 12-bit
 
   float t = sensors.getTempCByIndex(0);
+  Serial.print("DS18B20 reading: ");
+  Serial.println(t, 1);
+  
   if (t == DEVICE_DISCONNECTED_C || t < -55.0 || t > 125.0) {
+    Serial.println("DS18B20 ERROR - Sensor not responding!");
     currentStatus = "SENS ERR";
     failedSyncCount++;
     if (failedSyncCount >= 10) {
@@ -465,6 +469,8 @@ void sendData() {
     return;
   }
   currentTemp = t;
+  Serial.print("DS18B20 OK: ");
+  Serial.println(t, 1);
 
   // WiFi ไม่ต่อ → เก็บข้อมูลใน Offline Queue
   if (WiFi.status() != WL_CONNECTED) {
@@ -1121,11 +1127,17 @@ void loop() {
       isConversionRequestIssued = true;
     } else if (currentMillis - conversionStartTime >= 750) {
       // เมื่อเวลาผ่านไปเกิน 750ms นับจากสั่งคำนวณ ให้ดึงค่ามาแสดงผล
-      currentTemp = sensors.getTempCByIndex(0);
+      float tempRead = sensors.getTempCByIndex(0);
+      Serial.print("Loop DS18B20 reading: ");
+      Serial.println(tempRead, 1);
       
-      // ถ้าเชื่อมต่อ WiFi ได้ปกติ แต่อยู่ในช่วงพักรอส่งข้อมูล ให้คงสถานะ SYNCED หรือ CONNECTED ไว้
-      if (WiFi.status() == WL_CONNECTED && currentStatus == "RECONNECTING") {
-        currentStatus = "CONNECTED";
+      if (tempRead != DEVICE_DISCONNECTED_C && tempRead >= -55.0 && tempRead <= 125.0) {
+        currentTemp = tempRead;
+        if (WiFi.status() == WL_CONNECTED && currentStatus == "RECONNECTING") {
+          currentStatus = "CONNECTED";
+        }
+      } else {
+        Serial.println("Loop DS18B20 ERROR - keeping previous value");
       }
       
       updateDisplay(currentTemp, currentStatus);
