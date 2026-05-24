@@ -542,6 +542,37 @@ void sendData() {
       failedSyncCount = 0;
       syncSuccess = true;
       lastSyncTimeEpoch = time(nullptr);
+      
+      // ดึง threshold จาก GAS
+      String settingsUrl = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(boardID);
+      if (http.begin(client, settingsUrl)) {
+        int settingsCode = http.GET();
+        if (settingsCode == 200) {
+          String payload = http.getString();
+          int maxPos = payload.indexOf("\"maxTemp\":");
+          int minPos = payload.indexOf("\"minTemp\":");
+          if (maxPos != -1) {
+            int endPos = payload.indexOf(",", maxPos);
+            if (endPos == -1) endPos = payload.indexOf("}", maxPos);
+            String maxStr = payload.substring(maxPos + 9, endPos);
+            maxStr.trim();
+            if (maxStr.length() > 0) {
+              maxStr.toCharArray(maxTempAlert, 10);
+              saveConfig();
+            }
+          }
+          if (minPos != -1) {
+            int endPos = payload.indexOf("}", minPos);
+            String minStr = payload.substring(minPos + 9, endPos);
+            minStr.trim();
+            if (minStr.length() > 0) {
+              minStr.toCharArray(minTempAlert, 10);
+            }
+          }
+          Serial.println("Settings updated from GAS");
+        }
+        http.end();
+      }
     } else {
       currentStatus = "ERR " + String(httpCode);
     }
@@ -653,11 +684,20 @@ void checkLineAlerts(float temp, float humid) {
     
     String message = "";
     if (newState == STATE_ALERT_LOW) {
-      message = "\n⚠️ [ALERT] Low Temp!\nTemp: " + String(temp, 1) + " C\nMin Limit: " + String(minT, 1) + " C\nBoard: " + boardID;
+      message = "⚠️ แจ้งเตือน: อุณหภูมิต่ำกว่าค่าตั้ง\n"
+               "🌡️ อุณหภูมิปัจจุบัน: " + String(temp, 1) + " °C\n"
+               "📉 ค่าต่ำสุด: " + String(minT, 1) + " °C\n"
+               "📟 บอร์ด: " + boardID;
     } else if (newState == STATE_ALERT_HIGH) {
-      message = "\n⚠️ [ALERT] High Temp!\nTemp: " + String(temp, 1) + " C\nMax Limit: " + String(maxT, 1) + " C\nBoard: " + boardID;
+      message = "⚠️ แจ้งเตือน: อุณหภูมิสูงกว่าค่าตั้ง\n"
+               "🌡️ อุณหภูมิปัจจุบัน: " + String(temp, 1) + " °C\n"
+               "📈 ค่าสูงสุด: " + String(maxT, 1) + " °C\n"
+               "📟 บอร์ด: " + boardID;
     } else if (newState == STATE_NORMAL && lastAlertState != STATE_NORMAL) {
-      message = "\n✅ [RESOLVED] Temp returned to normal.\nTemp: " + String(temp, 1) + " C\nRange: " + String(minT, 1) + " - " + String(maxT, 1) + " C\nBoard: " + boardID;
+      message = "✅ อุณหภูมิกลับมาปกติแล้ว\n"
+               "🌡️ อุณหภูมิปัจจุบัน: " + String(temp, 1) + " °C\n"
+               "📋 ช่วงปกติ: " + String(minT, 1) + " - " + String(maxT, 1) + " °C\n"
+               "📟 บอร์ด: " + boardID;
     }
 
     if (message != "") {
@@ -691,11 +731,20 @@ void checkLineAlerts(float temp, float humid) {
     
     String message = "";
     if (newHumidState == STATE_ALERT_LOW) {
-      message = "\n⚠️ [ALERT] Low Humidity!\nHumid: " + String(humid, 1) + " %\nMin Limit: " + String(minH, 1) + " %\nBoard: " + boardID;
+      message = "⚠️ แจ้งเตือน: ความชื้นต่ำกว่าค่าตั้ง\n"
+               "💧 ความชื้นปัจจุบัน: " + String(humid, 1) + " %\n"
+               "📉 ค่าต่ำสุด: " + String(minH, 1) + " %\n"
+               "📟 บอร์ด: " + boardID;
     } else if (newHumidState == STATE_ALERT_HIGH) {
-      message = "\n⚠️ [ALERT] High Humidity!\nHumid: " + String(humid, 1) + " %\nMax Limit: " + String(maxH, 1) + " %\nBoard: " + boardID;
+      message = "⚠️ แจ้งเตือน: ความชื้นสูงกว่าค่าตั้ง\n"
+               "💧 ความชื้นปัจจุบัน: " + String(humid, 1) + " %\n"
+               "📈 ค่าสูงสุด: " + String(maxH, 1) + " %\n"
+               "📟 บอร์ด: " + boardID;
     } else if (newHumidState == STATE_NORMAL && lastHumidAlertState != STATE_NORMAL) {
-      message = "\n✅ [RESOLVED] Humidity returned to normal.\nHumid: " + String(humid, 1) + " %\nRange: " + String(minH, 1) + " - " + String(maxH, 1) + " %\nBoard: " + boardID;
+      message = "✅ ความชื้นกลับมาปกติแล้ว\n"
+               "💧 ความชื้นปัจจุบัน: " + String(humid, 1) + " %\n"
+               "📋 ช่วงปกติ: " + String(minH, 1) + " - " + String(maxH, 1) + " %\n"
+               "📟 บอร์ด: " + boardID;
     }
 
     if (message != "") {

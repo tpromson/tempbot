@@ -40,6 +40,7 @@ var HEADERS = [
 
 var LINE_REPLY_URL  = "https://api.line.me/v2/bot/message/reply";
 var LINE_PUSH_URL   = "https://api.line.me/v2/bot/message/push";
+var SETTINGS_SHEET  = "Settings";
 
 var QUICK_REPLY_ITEMS = [
   { label: "🌡️ ล่าสุด", text: "temp" },
@@ -47,6 +48,11 @@ var QUICK_REPLY_ITEMS = [
   { label: "📈 สรุป", text: "สรุป" },
   { label: "❓ ช่วย", text: "help" }
 ];
+
+var DEFAULT_THRESHOLDS = {
+  maxTemp: 35.0,
+  minTemp: 20.0
+};
 
 // ============================================================
 // doGet: รับข้อมูลจาก ESP8266
@@ -109,6 +115,12 @@ function doGet(e) {
 
     formatLastRow(sheet, isQueued);
     if (MAX_ROWS > 0) trimOldRows(sheet);
+
+    // ESP ขอดึงค่า threshold
+    if (e.parameter.get_settings === "1") {
+      var thresholds = getThresholds(boardId.trim());
+      return respond(JSON.stringify(thresholds));
+    }
 
     return respond("OK");
 
@@ -191,6 +203,43 @@ function handleTextMessage(event) {
       replyToLine(replyToken, report.text);
     }
 
+  } else if (text.indexOf("ตั้ง") === 0) {
+    // คำสั่ง: ตั้ง max 35 / ตั้ง min 20 / ตั้ง max 35 Farm03
+    var parts = rawText.trim().split(/\s+/);
+    if (parts.length >= 3) {
+      var type = parts[1].toLowerCase();
+      var value = parseFloat(parts[2]);
+      var targetBoard = parts.length >= 4 ? parts.slice(3).join(" ") : "DEFAULT";
+      
+      if (isNaN(value)) {
+        replyToLine(replyToken, "❌ ค่าไม่ถูกต้อง ลองใหม่ เช่น 'ตั้ง max 35'");
+      } else if (type === "max") {
+        saveThreshold(targetBoard, value, null);
+        var current = getThresholds(targetBoard);
+        replyToLine(replyToken, "✅ ตั้ง MAX " + targetBoard + ": " + current.maxTemp + " °C");
+      } else if (type === "min") {
+        saveThreshold(targetBoard, null, value);
+        var current = getThresholds(targetBoard);
+        replyToLine(replyToken, "✅ ตั้ง MIN " + targetBoard + ": " + current.minTemp + " °C");
+      } else {
+        replyToLine(replyToken, "❌ ไม่รู้จัก ลอง 'ตั้ง max 35' หรือ 'ตั้ง min 20'");
+      }
+    } else {
+      replyToLine(replyToken, "❌ ข้อมูลไม่ครบ\nลอง: ตั้ง max 35 หรือ ตั้ง min 20\nเพิ่มชื่อบอร์ด: ตั้ง max 35 Farm03");
+    }
+
+  } else if (text === "ดูค่า" || text === "ตั้งค่า" || text === "ค่า") {
+    var parts = rawText.trim().split(/\s+/);
+    var targetBoard = parts.length >= 2 ? parts.slice(1).join(" ") : "DEFAULT";
+    var t = getThresholds(targetBoard);
+    var msg = "📋 ค่าตั้งของ " + targetBoard + "\n"
+            + "─────────────────\n"
+            + "🌡️ MAX: " + t.maxTemp + " °C\n"
+            + "🌡️ MIN: " + t.minTemp + " °C\n"
+            + "─────────────────\n"
+            + "เปลี่ยน: ตั้ง max 35 หรือ ตั้ง min 20";
+    replyToLine(replyToken, msg);
+
   } else if (["help", "ช่วยเหลือ", "คำสั่ง", "?"].indexOf(text) !== -1) {
     var response = "📋 TempBot คำสั่งที่ใช้ได้\n"
                  + "─────────────────\n"
@@ -200,6 +249,10 @@ function handleTextMessage(event) {
                  + "  → สรุปทุกบอร์ด\n\n"
                  + "• สรุป / report / กราฟ [ชื่อบอร์ด]\n"
                  + "  → รายงานสรุปรายวัน 24 ชม. และกราฟสถิติ\n\n"
+                 + "• ตั้ง max 35 / ตั้ง min 20 [บอร์ด]\n"
+                 + "  → ตั้งค่าแจ้งเตือนอุณหภูมิ\n\n"
+                 + "• ดูค่า / ดูค่า [บอร์ด]\n"
+                 + "  → ดูค่าตั้งปัจจุบัน\n\n"
                  + "• help / ช่วยเหลือ\n"
                  + "  → แสดงคำสั่งนี้";
     replyToLine(replyToken, response);
@@ -720,6 +773,74 @@ function getSheet() {
   return SHEET_NAME
     ? (ss.getSheetByName(SHEET_NAME) || ss.getActiveSheet())
     : ss.getActiveSheet();
+}
+
+// ============================================================
+// Helper: ดึง Settings Sheet
+// ============================================================
+function getSettingsSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SETTINGS_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(SETTINGS_SHEET);
+    sheet.appendRow(["Board ID", "Max Temp (°C)", "Min Temp (°C)", "Updated"]);
+    sheet.getRange(1, 1, 1, 4).setBackground("#1a73e8").setFontColor("#ffffff").setFontWeight("bold");
+    sheet.setColumnWidth(1, 150);
+    sheet.setColumnWidth(2, 120);
+    sheet.setColumnWidth(3, 120);
+    sheet.setColumnWidth(4, 160);
+  }
+  return sheet;
+}
+
+// ============================================================
+// Helper: ดึง threshold ของบอร์ด
+// ============================================================
+function getThresholds(boardId) {
+  var sheet = getSettingsSheet();
+  var data = sheet.getDataRange().getValues();
+  
+  var result = {
+    maxTemp: DEFAULT_THRESHOLDS.maxTemp,
+    minTemp: DEFAULT_THRESHOLDS.minTemp
+  };
+  
+  // หาค่าเฉพาะของบอร์ด
+  for (var i = 1; i < data.length; i++) {
+    var rowBoardId = String(data[i][0] || "").trim();
+    if (rowBoardId === boardId) {
+      if (data[i][1] !== "") result.maxTemp = parseFloat(data[i][1]);
+      if (data[i][2] !== "") result.minTemp = parseFloat(data[i][2]);
+      break;
+    }
+  }
+  
+  return result;
+}
+
+// ============================================================
+// Helper: บันทึก threshold
+// ============================================================
+function saveThreshold(boardId, maxTemp, minTemp) {
+  var sheet = getSettingsSheet();
+  var data = sheet.getDataRange().getValues();
+  var now = new Date();
+  var formattedTime = Utilities.formatDate(now, TIMEZONE, "yyyy-MM-dd HH:mm");
+  
+  // หา row ของบอร์ด
+  var rowIndex = -1;
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0] || "").trim() === boardId) {
+      rowIndex = i + 1; // 1-based index
+      break;
+    }
+  }
+  
+  if (rowIndex > 0) {
+    sheet.getRange(rowIndex, 2, 1, 3).setValues([[maxTemp, minTemp, formattedTime]]);
+  } else {
+    sheet.appendRow([boardId, maxTemp, minTemp, formattedTime]);
+  }
 }
 
 // ============================================================
