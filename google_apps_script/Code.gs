@@ -41,6 +41,13 @@ var HEADERS = [
 var LINE_REPLY_URL  = "https://api.line.me/v2/bot/message/reply";
 var LINE_PUSH_URL   = "https://api.line.me/v2/bot/message/push";
 
+var QUICK_REPLY_ITEMS = [
+  { label: "🌡️ ล่าสุด", text: "temp" },
+  { label: "📊 สถานะ", text: "status" },
+  { label: "📈 สรุป", text: "สรุป" },
+  { label: "❓ ช่วย", text: "help" }
+];
+
 // ============================================================
 // doGet: รับข้อมูลจาก ESP8266
 // ?temperature=28.5&humidity=65.2&board_id=BOARD_A1B2C3[&queued=1]
@@ -652,12 +659,26 @@ function replyToLine(replyToken, messages, retries) {
 
   retries = retries || 0;
   var messageArray = [];
+  var quickReplyItems = QUICK_REPLY_ITEMS.map(function(item) {
+    return {
+      type: "action",
+      action: { type: "message", label: item.label, text: item.text }
+    };
+  });
+
   if (Array.isArray(messages)) {
     messageArray = messages;
   } else if (typeof messages === "string") {
     messageArray = [{ type: "text", text: messages }];
   } else {
     messageArray = [messages];
+  }
+
+  // Add quick reply to text messages
+  for (var i = 0; i < messageArray.length; i++) {
+    if (messageArray[i].type === "text") {
+      messageArray[i].quickReply = { items: quickReplyItems };
+    }
   }
 
   var payload = JSON.stringify({
