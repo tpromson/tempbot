@@ -215,13 +215,15 @@ function getLatestEntry() {
   var humid     = row[3];
   var dataType  = row[4];
 
+  var formattedTime = Utilities.formatDate(new Date(timestamp), TIMEZONE, "dd MMM. yy HH:mm") + " น.";
+  
   var msg = "🌡️ ข้อมูลล่าสุด\n";
   msg += "📟 " + boardId + "\n";
-  msg += "🌡️ อุณหภูมิ: " + temp + "°C\n";
+  msg += "🌡️ อุณหภูมิ: " + temp + " °C\n";
   if (humid !== "" && humid !== null && humid !== undefined) {
-    msg += "💧 ความชื้น: " + humid + "%\n";
+    msg += "💧 ความชื้น: " + humid + " %\n";
   }
-  msg += "🕐 " + timestamp;
+  msg += "🕐 " + formattedTime;
   if (dataType === "BUFFERED") {
     msg += "\n⚠️ (ข้อมูลจาก Offline Buffer)";
   }
@@ -256,12 +258,13 @@ function getAllBoardStatus() {
   var boards = Array.from(latestPerBoard.keys());
   for (var b = 0; b < boards.length; b++) {
     var d = latestPerBoard.get(boards[b]);
+    var boardTime = Utilities.formatDate(new Date(d[0]), TIMEZONE, "dd MMM. yy HH:mm") + " น.";
     msg += "📟 " + d[1] + "\n";
-    msg += "🌡️ " + d[2] + "°C";
+    msg += "🌡️ " + d[2] + " °C";
     if (d[3] !== "" && d[3] !== 0) {
-      msg += "  💧 " + d[3] + "%";
+      msg += "  💧 " + d[3] + " %";
     }
-    msg += "\n🕐 " + d[0];
+    msg += "\n🕐 " + boardTime;
     if (b < boards.length - 1) msg += "\n─────────────────\n";
   }
 
@@ -519,10 +522,10 @@ function generateDailyReport(boardId) {
   // 6. ประกอบข้อความรายงานสรุป
   var msg = "📊 " + realBoardName + " - สรุป 24 ชม.\n";
   msg += "──────────────────\n";
-  msg += "🌡️ อุณหภูมิ: " + minTempStr + " - " + maxTempStr + " (เฉลี่ย " + avgTempStr + ")\n";
+  msg += "🌡️ อุณหภูมิ: " + minTempStr.replace("°C", " °C") + " - " + maxTempStr.replace("°C", " °C") + " (เฉลี่ย " + avgTempStr.replace("°C", " °C") + ")\n";
 
   if (hasHumid && countHumid > 0) {
-    msg += "💧 ความชื้น: " + minHumidStr + " - " + maxHumidStr + " (เฉลี่ย " + avgHumidStr + ")\n";
+    msg += "💧 ความชื้น: " + minHumidStr.replace("%", " %") + " - " + maxHumidStr.replace("%", " %") + " (เฉลี่ย " + avgHumidStr.replace("%", " %") + ")\n";
   }
 
   msg += "📈 บันทึก " + filtered.length + " ครั้ง";
