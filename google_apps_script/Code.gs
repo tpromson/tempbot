@@ -53,8 +53,11 @@ function doGet(e) {
     var isQueued       = (e.parameter.queued === "1");
     var timestampParam = e.parameter.timestamp;
 
-    if (!temperature || !boardId) {
-      return respond("ERROR: Missing temperature or board_id");
+    if (!temperature) {
+      return respond("ERROR: Missing temperature");
+    }
+    if (!boardId || boardId.trim() === "") {
+      return respond("ERROR: Missing or empty board_id");
     }
 
     var tempVal  = parseFloat(temperature);
@@ -64,6 +67,16 @@ function doGet(e) {
       return respond("ERROR: Invalid temperature: " + temperature);
     }
 
+    var humidVal = parseFloat(humidity);
+    if (humidity !== "" && humidity !== null && !isNaN(humidVal) && (humidVal < 0 || humidVal > 100)) {
+      return respond("ERROR: Invalid humidity: " + humidity);
+    }
+    if (isNaN(humidVal) && humidity !== "" && humidity !== null) {
+      humidVal = 0;
+    } else if (isNaN(humidVal)) {
+      humidVal = 0;
+    }
+
     var sheet = getSheet();
 
     if (sheet.getLastRow() === 0) createHeader(sheet);
@@ -71,8 +84,8 @@ function doGet(e) {
     var now = new Date();
     // ถ้าบอร์ดส่งเวลา Unix Epoch ย้อนหลังมา ให้แปลงเป็นเวลาบันทึกจริง
     if (isQueued && timestampParam) {
-      var epoch = parseInt(timestampParam);
-      if (!isNaN(epoch) && epoch > 1000000000) {
+      var epoch = parseInt(timestampParam, 10);
+      if (!isNaN(epoch) && epoch > 0 && epoch > 1000000000 && epoch <= 9999999999) {
         now = new Date(epoch * 1000);
       }
     }
@@ -81,9 +94,9 @@ function doGet(e) {
 
     sheet.appendRow([
       timestamp,
-      boardId,
+      boardId.trim(),
       tempVal,
-      humidVal > 0 ? humidVal : "",
+      humidVal,
       isQueued ? "BUFFERED" : "LIVE"
     ]);
 
@@ -205,7 +218,7 @@ function getLatestEntry() {
   var msg = "🌡️ ข้อมูลล่าสุด\n";
   msg += "📟 " + boardId + "\n";
   msg += "🌡️ อุณหภูมิ: " + temp + "°C\n";
-  if (humid !== "" && humid !== 0) {
+  if (humid !== "" && humid !== null && humid !== undefined) {
     msg += "💧 ความชื้น: " + humid + "%\n";
   }
   msg += "🕐 " + timestamp;
@@ -225,26 +238,24 @@ function getAllBoardStatus() {
 
   if (lastRow <= 1) return "❌ ยังไม่มีข้อมูลในระบบ";
 
-  // อ่านข้อมูลทั้งหมด (ไม่รวม header)
   var allData = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
 
-  // เก็บข้อมูลล่าสุดต่อบอร์ด (loop จากท้ายขึ้นหัว)
-  var latestPerBoard = {};
+  var latestPerBoard = new Map();
   for (var i = allData.length - 1; i >= 0; i--) {
-    var boardId = allData[i][1];
-    if (boardId && !latestPerBoard[boardId]) {
-      latestPerBoard[boardId] = allData[i];
+    var boardId = String(allData[i][1] || "");
+    if (boardId && !latestPerBoard.has(boardId)) {
+      latestPerBoard.set(boardId, allData[i]);
     }
   }
 
-  var boards = Object.keys(latestPerBoard);
-  if (boards.length === 0) return "❌ ไม่พบข้อมูลบอร์ด";
+  if (latestPerBoard.size === 0) return "❌ ไม่พบข้อมูลบอร์ด";
 
-  var msg = "📊 สถานะทุกบอร์ด (" + boards.length + " บอร์ด)\n";
+  var msg = "📊 สถานะทุกบอร์ด (" + latestPerBoard.size + " บอร์ด)\n";
   msg += "─────────────────\n";
 
+  var boards = Array.from(latestPerBoard.keys());
   for (var b = 0; b < boards.length; b++) {
-    var d = latestPerBoard[boards[b]];
+    var d = latestPerBoard.get(boards[b]);
     msg += "📟 " + d[1] + "\n";
     msg += "🌡️ " + d[2] + "°C";
     if (d[3] !== "" && d[3] !== 0) {
@@ -279,9 +290,9 @@ function generateDailyReport(boardId) {
   if (targetBoard === "") {
     for (var i = data.length - 1; i >= 0; i--) {
       var rowDate = new Date(data[i][0]);
-      if (rowDate >= oneDayAgo) {
-        targetBoard = data[i][1] ? String(data[i][1]) : "";
-        if (targetBoard !== "") break;
+      if (rowDate >= oneDayAgo && data[i][1]) {
+        targetBoard = String(data[i][1]);
+        break;
       }
     }
   }
@@ -291,9 +302,10 @@ function generateDailyReport(boardId) {
   }
 
   var filtered = [];
+  var targetLower = targetBoard.toLowerCase();
   for (var i = 0; i < data.length; i++) {
     var rowDate = new Date(data[i][0]);
-    if (rowDate >= oneDayAgo && data[i][1] && String(data[i][1]).toLowerCase() === targetBoard.toLowerCase()) {
+    if (rowDate >= oneDayAgo && data[i][1] && String(data[i][1]).toLowerCase() === targetLower) {
       filtered.push({
         time: rowDate,
         temp: parseFloat(data[i][2]),
@@ -309,7 +321,7 @@ function generateDailyReport(boardId) {
   // นำชื่อจริงของบอร์ดมาแสดง
   var realBoardName = targetBoard;
   for (var i = data.length - 1; i >= 0; i--) {
-    if (data[i][1] && String(data[i][1]).toLowerCase() === targetBoard.toLowerCase()) {
+    if (data[i][1] && String(data[i][1]).toLowerCase() === targetLower) {
       realBoardName = String(data[i][1]);
       break;
     }
@@ -323,14 +335,14 @@ function generateDailyReport(boardId) {
     var t = filtered[i].temp;
     var h = filtered[i].humid;
 
-    if (t !== null && !isNaN(t) && t > -50 && t < 100) {
+    if (t !== null && !isNaN(t) && t >= -55 && t <= 125) {
       if (t < minTemp) minTemp = t;
       if (t > maxTemp) maxTemp = t;
       sumTemp += t;
       countTemp++;
     }
 
-    if (h !== null && !isNaN(h) && h > 0 && h <= 100) {
+    if (h !== null && !isNaN(h) && h >= 0 && h <= 100) {
       if (h < minHumid) minHumid = h;
       if (h > maxHumid) maxHumid = h;
       sumHumid += h;
@@ -365,8 +377,11 @@ function generateDailyReport(boardId) {
   // จัดข้อมูลใส่กลุ่มตามชั่วโมง
   for (var i = 0; i < filtered.length; i++) {
     var pt = filtered[i];
+    var ptTimeMs = pt.time.getTime();
     for (var b = 0; b < buckets.length; b++) {
-      if (pt.time >= buckets[b].startTime && pt.time <= buckets[b].endTime) {
+      var bucketStartMs = buckets[b].startTime.getTime();
+      var bucketEndMs = buckets[b].endTime.getTime() + 999; // inclusive end
+      if (ptTimeMs >= bucketStartMs && ptTimeMs <= bucketEndMs) {
         if (pt.temp !== null && !isNaN(pt.temp)) buckets[b].temps.push(pt.temp);
         if (pt.humid !== null && !isNaN(pt.humid)) buckets[b].humids.push(pt.humid);
         break;
@@ -502,29 +517,16 @@ function generateDailyReport(boardId) {
   }
 
   // 6. ประกอบข้อความรายงานสรุป
-  var timeFormat = "yyyy-MM-dd HH:mm";
-  var startStr = Utilities.formatDate(oneDayAgo, TIMEZONE, timeFormat);
-  var endStr = Utilities.formatDate(now, TIMEZONE, timeFormat);
-
-  var msg = "📊 [Daily Report] สรุปรายงานรายวัน\n";
-  msg += "📟 บอร์ด: " + realBoardName + "\n";
-  msg += "📅 " + startStr + " ถึง " + endStr + "\n";
+  var msg = "📊 " + realBoardName + " - สรุป 24 ชม.\n";
   msg += "──────────────────\n";
-  msg += "🌡️ อุณหภูมิ (Temperature):\n";
-  msg += "   • สูงสุด (Max): " + maxTempStr + "\n";
-  msg += "   • ต่ำสุด (Min): " + minTempStr + "\n";
-  msg += "   • เฉลี่ย (Avg): " + avgTempStr + "\n";
+  msg += "🌡️ อุณหภูมิ: " + minTempStr + " - " + maxTempStr + " (เฉลี่ย " + avgTempStr + ")\n";
 
   if (hasHumid && countHumid > 0) {
-    msg += "\n💧 ความชื้น (Humidity):\n";
-    msg += "   • สูงสุด (Max): " + maxHumidStr + "\n";
-    msg += "   • ต่ำสุด (Min): " + minHumidStr + "\n";
-    msg += "   • เฉลี่ย (Avg): " + avgHumidStr + "\n";
+    msg += "💧 ความชื้น: " + minHumidStr + " - " + maxHumidStr + " (เฉลี่ย " + avgHumidStr + ")\n";
   }
 
-  msg += "\n📈 บันทึกข้อมูลทั้งหมด: " + filtered.length + " ชุด\n";
-  msg += "──────────────────\n";
-  msg += "*รายงานสรุปข้อมูลรายชั่วโมงย้อนหลัง 24 ชม.";
+  msg += "📈 บันทึก " + filtered.length + " ครั้ง";
+  msg += "\n──────────────────";
 
   return { text: msg, chartUrl: chartUrl, boardId: realBoardName };
 }
@@ -551,16 +553,16 @@ function sendDailyReportPush() {
     var now = new Date();
     var oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-    var activeBoards = {};
+    var activeBoards = new Map();
     for (var i = 0; i < data.length; i++) {
       var rowDate = new Date(data[i][0]);
-      if (rowDate >= oneDayAgo) {
-        var bId = data[i][1];
-        if (bId) activeBoards[bId] = true;
+      if (rowDate >= oneDayAgo && data[i][1]) {
+        var bId = String(data[i][1]);
+        if (!activeBoards.has(bId)) activeBoards.set(bId, true);
       }
     }
 
-    var boards = Object.keys(activeBoards);
+    var boards = Array.from(activeBoards.keys());
     if (boards.length === 0) {
       Logger.log("No active boards found in the last 24 hours.");
       return;
@@ -585,7 +587,7 @@ function sendDailyReportPush() {
       }
 
       pushToLine(targetId, messages);
-      Utilities.sleep(1500); // ดีเลย์เพื่อป้องการสลับลำดับข้อความ
+      Utilities.sleep(1500); // ดีเลย์เพื่อป้องกันการสลับลำดับข้อความ
     }
 
   } catch (err) {
@@ -596,10 +598,11 @@ function sendDailyReportPush() {
 // ============================================================
 // pushToLine: ส่งข้อความแบบ Push ไปยังกลุ่ม/ผู้ใช้ปลายทาง
 // ============================================================
-function pushToLine(targetId, messages) {
+function pushToLine(targetId, messages, retries) {
   var token = PropertiesService.getScriptProperties().getProperty("LINE_TOKEN");
   if (!token) return;
 
+  retries = retries || 0;
   var messageArray = Array.isArray(messages) ? messages : [messages];
 
   var payload = JSON.stringify({
@@ -617,9 +620,19 @@ function pushToLine(targetId, messages) {
 
   try {
     var res = UrlFetchApp.fetch(LINE_PUSH_URL, options);
-    Logger.log("LINE push HTTP " + res.getResponseCode() + ": " + res.getContentText());
+    var responseCode = res.getResponseCode();
+    Logger.log("LINE push HTTP " + responseCode + ": " + res.getContentText());
+    
+    if (responseCode === 429 && retries < 2) {
+      Utilities.sleep(1500 * (retries + 1));
+      pushToLine(targetId, messages, retries + 1);
+    }
   } catch (err) {
     Logger.log("LINE push error: " + err);
+    if (retries < 2) {
+      Utilities.sleep(1500);
+      pushToLine(targetId, messages, retries + 1);
+    }
   }
 }
 
@@ -627,13 +640,14 @@ function pushToLine(targetId, messages) {
 // replyToLine: ส่ง reply กลับ LINE โดยใช้ replyToken
 // (รองรับการส่งข้อความหลายประเภทพร้อมกัน)
 // ============================================================
-function replyToLine(replyToken, messages) {
+function replyToLine(replyToken, messages, retries) {
   var token = PropertiesService.getScriptProperties().getProperty("LINE_TOKEN");
   if (!token) {
     Logger.log("ERROR: LINE_TOKEN not found in Script Properties!");
     return;
   }
 
+  retries = retries || 0;
   var messageArray = [];
   if (Array.isArray(messages)) {
     messageArray = messages;
@@ -658,9 +672,19 @@ function replyToLine(replyToken, messages) {
 
   try {
     var res = UrlFetchApp.fetch(LINE_REPLY_URL, options);
-    Logger.log("LINE reply HTTP " + res.getResponseCode() + ": " + res.getContentText());
+    var responseCode = res.getResponseCode();
+    Logger.log("LINE reply HTTP " + responseCode + ": " + res.getContentText());
+    
+    if (responseCode === 429 && retries < 2) {
+      Utilities.sleep(1500 * (retries + 1));
+      replyToLine(replyToken, messages, retries + 1);
+    }
   } catch (err) {
     Logger.log("LINE reply error: " + err);
+    if (retries < 2) {
+      Utilities.sleep(1500);
+      replyToLine(replyToken, messages, retries + 1);
+    }
   }
 }
 
