@@ -41,7 +41,8 @@ char minTempAlert[10] = "20.0";
 char maxTempAlert[10] = "35.0";
 char boardName[32] = "";     // Custom Board Name (เช่น Kitchen, ServerRoom)
 char bitmapName[20] = "cat"; // Bitmap set: cat, chicken, fish, tree
-char otaPassword[32] = "";   // ArduinoOTA update password
+char otaPassword[32] = "";     // ArduinoOTA update password
+char staticIP[16] = "";        // Static IP (empty = DHCP)
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
@@ -83,6 +84,7 @@ void saveConfig() {
     configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
     configFile.write((uint8_t*)boardName, sizeof(boardName));
     configFile.write((uint8_t*)bitmapName, sizeof(bitmapName));
+    configFile.write((uint8_t*)staticIP, sizeof(staticIP));
     configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
     configFile.close();
   }
@@ -121,13 +123,15 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 <label>Board Name:</label><input name='board' value='%s'><br/>
 <label>Min Temp (C):</label><input name='min_temp' value='%s'><br/>
 <label>Max Temp (C):</label><input name='max_temp' value='%s'><br/>
+<label>OTA Password:</label><input name='ota_pass' value='%s'><br/>
+<label>Static IP:</label><input name='static_ip' value='%s' placeholder='DHCP if empty'><br/>
 <input type='submit' value='Save'>
 </form>
 </body></html>)HTML";
 
 void handleRoot(){
   char buffer[1024];
-  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert);
+  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert, otaPassword, staticIP);
   server.send(200, "text/html", buffer);
 }
 
@@ -138,6 +142,8 @@ void handleSave(){
   if(server.hasArg("board")) strncpy(boardName, server.arg("board").c_str(), sizeof(boardName)-1);
   if(server.hasArg("min_temp")) strncpy(minTempAlert, server.arg("min_temp").c_str(), sizeof(minTempAlert)-1);
   if(server.hasArg("max_temp")) strncpy(maxTempAlert, server.arg("max_temp").c_str(), sizeof(maxTempAlert)-1);
+  if(server.hasArg("ota_pass")) strncpy(otaPassword, server.arg("ota_pass").c_str(), sizeof(otaPassword)-1);
+  if(server.hasArg("static_ip")) strncpy(staticIP, server.arg("static_ip").c_str(), sizeof(staticIP)-1);
   saveConfig();
   server.send(200, "text/plain", "Config saved, rebooting...");
   delay(500);
@@ -192,9 +198,9 @@ void showOnDisplay(String title, String msg, float temp = -999) {
 
 void playAnimation(int repetitions, String message) {
   for (int i = 0; i < repetitions; i++) {
-    for (int f = 0; f < FRAME_COUNT; f++) {
+    for (int f = 0; f < currentFrameCount; f++) {
       display.clearDisplay();
-      display.drawBitmap(32, 0, frames[f], FRAME_WIDTH, FRAME_HEIGHT, WHITE);
+      display.drawBitmap(32, 0, currentFrames[f], FRAME_WIDTH, FRAME_HEIGHT, WHITE);
       display.setTextSize(1);
       display.setTextColor(WHITE);
       
@@ -731,6 +737,7 @@ void openConfigPortal() {
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
   WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
+  WiFiManagerParameter custom_static_ip("static_ip", "Static IP (e.g. 192.168.0.150)", staticIP, 16);
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -740,6 +747,7 @@ void openConfigPortal() {
   wm.addParameter(&custom_max_temp);
   wm.addParameter(&custom_board_name);
   wm.addParameter(&custom_ota_password);
+  wm.addParameter(&custom_static_ip);
 
   wm.setConfigPortalTimeout(120); // ปิด portal อัตโนมัติใน 2 นาที
 
@@ -805,16 +813,17 @@ void setup() {
         size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
-        if (fileSize >= 484) {
-          // รูปแบบใหม่ล่าสุด: มี otaPassword
+        if (fileSize >= 504) {
+          // รูปแบบใหม่ล่าสุด: มี staticIP
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           configFile.readBytes(lineGroupId, sizeof(lineGroupId));
           configFile.readBytes(boardName, sizeof(boardName));
           configFile.readBytes(bitmapName, sizeof(bitmapName));
+          configFile.readBytes(staticIP, sizeof(staticIP));
           configFile.readBytes(otaPassword, sizeof(otaPassword));
-        } else if (fileSize >= 464) {
+        } else if (fileSize >= 484) {
           // รูปแบบที่มี boardName แต่ไม่มี otaPassword
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
@@ -913,6 +922,7 @@ void setup() {
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
   WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
+  WiFiManagerParameter custom_static_ip("static_ip", "Static IP (e.g. 192.168.0.150)", staticIP, 16);
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -922,10 +932,23 @@ void setup() {
   wm.addParameter(&custom_max_temp);
   wm.addParameter(&custom_board_name);
   wm.addParameter(&custom_ota_password);
+  wm.addParameter(&custom_static_ip);
   
   // ตั้งค่า Config ของ WiFiManager ให้เหมาะกับการจัดการตอนไฟตก
   wm.setConfigPortalTimeout(120); // ถ้าผ่านไป 2 นาทีไม่มีคนมาต่อ AP เพื่อตั้งค่า ให้หลุดจาก setup ไปทำ loop ต่อ (สำคัญมากตอนไฟดับแล้วเราไม่อยู่บ้าน)
   wm.setConnectTimeout(15);       // พยายามต่อกับเร้าเตอร์เดิมตัวละ 15 วินาที
+  
+  // ถ้ามี staticIP ที่ตั้งไว้ ตั้งค่า Static IP ก่อน connect
+  if (strlen(staticIP) > 0) {
+    IPAddress ip, gateway, subnet;
+    if (ip.fromString(staticIP)) {
+      gateway.fromString("192.168.0.1");
+      subnet.fromString("255.255.255.0");
+      wm.setSTAStaticIPConfig(ip, gateway, subnet);
+      Serial.print("Static IP configured: ");
+      Serial.println(staticIP);
+    }
+  }
   
   String boardID = "ESP8266_" + String(ESP.getChipId(), HEX);
   boardID.toUpperCase();
@@ -1004,7 +1027,11 @@ void setup() {
     Serial.println("ArduinoOTA: Unprotected.");
   }
   ArduinoOTA.begin();
-
+  Serial.print("OTA ready! IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.print("OTA port: 8266, Hostname: ");
+  Serial.println(boardID.c_str());
+  
   if (WiFi.status() == WL_CONNECTED) {
     sendData();
   }

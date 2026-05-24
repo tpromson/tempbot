@@ -3,11 +3,11 @@
 
 #include <Arduino.h>
 
-// --- Bitmap Sets Available ---
-#include "bitmaps_cat.h"      // Cat (default)
-#include "bitmaps_chicken.h"  // Chicken placeholder
-#include "bitmaps_fish.h"     // Fish placeholder
-#include "bitmaps_tree.h"      // Tree placeholder
+// Include all bitmap sets
+#include "bitmaps_cat.h"
+#include "bitmaps_chicken.h"
+#include "bitmaps_fish.h"
+#include "bitmaps_tree.h"
 
 // --- Current Bitmap Selection ---
 // Values: "cat", "chicken", "fish", "tree"
@@ -16,16 +16,17 @@
 static String currentBitmapName = DEFAULT_BITMAP;
 
 struct BitmapSet {
-  const unsigned char* frames;
+  const unsigned char (*frames)[512];  // Pointer to 2D array
   int frameCount;
   int frameSize;
 };
 
+// All available bitmap sets
 static const BitmapSet bitmapSets[] = {
-  { frames_cat, FRAME_COUNT_cat, 512 },
-  { frames_chicken, FRAME_COUNT_chicken, 512 },
-  { frames_fish, FRAME_COUNT_fish, 512 },
-  { frames_tree, FRAME_COUNT_tree, 512 }
+  { frames_cat, FRAME_COUNT_CAT, 512 },
+  { frames_chicken, FRAME_COUNT_CHICKEN, 512 },
+  { frames_fish, FRAME_COUNT_FISH, 512 },
+  { frames_tree, FRAME_COUNT_TREE, 512 }
 };
 
 static const char* bitmapNames[] = {
@@ -38,8 +39,8 @@ static const char* bitmapNames[] = {
 static const int BITMAP_SET_COUNT = 4;
 
 // Current selected frames
-static const unsigned char* currentFrames = frames_cat;
-static int currentFrameCount = FRAME_COUNT_cat;
+static const unsigned char (*currentFrames)[512] = frames_cat;
+static int currentFrameCount = FRAME_COUNT_CAT;
 static int currentFrameSize = 512;
 
 // --- Functions ---
