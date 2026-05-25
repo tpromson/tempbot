@@ -281,6 +281,10 @@ void queueData(float temp, float humid) {
 }
 
 void flushQueue() {
+  if (strlen(webAppUrl) < 10) {
+    Serial.println("FlushQueue aborted: No valid WebApp URL.");
+    return;
+  }
   if (!LittleFS.exists(QUEUE_FILE)) return;
 
   File f = LittleFS.open(QUEUE_FILE, "r");
@@ -352,6 +356,7 @@ void flushQueue() {
       ok = (http.GET() == 200);
       http.end();
     }
+    client.stop(); // ⚡ ปลดปล่อยซ็อกเก็ตเครือข่ายและหน่วยความจำทันทีหลังเสร็จสิ้นแต่ละช่อง
 
     if (ok) {
       sentCount++;
@@ -366,7 +371,7 @@ void flushQueue() {
       break; // WiFi หลุดหรือ server error → หยุดและลองใหม่รอบหน้า
     }
     ArduinoOTA.handle();
-    delay(300);
+    delay(500); // ⚡ เพิ่มเวลาพักเล็กน้อยให้หน่วยความจำเครือข่ายของระบบคืนค่า
     yield();
   }
 
@@ -1007,13 +1012,10 @@ void loop() {
 
   // 1. จัดการส่งข้อมูลไป Google Sheets (ทุก 30 นาที)
   if (currentMillis - lastTime >= timerDelay) {
-    if (WiFi.status() == WL_CONNECTED) {
-      playCatAnimation(1, "SENDING DATA"); 
-      sendData();
-      playCatAnimation(1, "DONE!");
-      lastTime = currentMillis; // รีเซ็ตเฉพาะเมื่อ WiFi ต่ออยู่และส่งได้
-    }
-    // ถ้า WiFi ยังไม่ต่อ จะ loop กลับมาลองส่งใหม่ทันทีในรอบถัดไป
+    playCatAnimation(1, "SENDING DATA"); 
+    sendData();
+    playCatAnimation(1, "DONE!");
+    lastTime = currentMillis; // รีเซ็ตตัวจับเวลา เพื่อรออีก 30 นาทีรอบถัดไป
   }
 
   // 2. ขยับตำแหน่งหน้าจอเพื่อป้องกันจอเบิร์น (ทุก 1 นาที)
@@ -1045,7 +1047,7 @@ void loop() {
       currentTemp = sensors.getTempCByIndex(0);
       
       // ถ้าเชื่อมต่อ WiFi ได้ปกติ แต่อยู่ในช่วงพักรอส่งข้อมูล ให้คงสถานะ SYNCED หรือ CONNECTED ไว้
-      if (WiFi.status() == WL_CONNECTED && currentStatus == "RECONNECTING") {
+      if (WiFi.status() == WL_CONNECTED && (currentStatus == "RECONNECTING" || currentStatus == "SENS ERR")) {
         currentStatus = "CONNECTED";
       }
       

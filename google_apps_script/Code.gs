@@ -212,28 +212,41 @@ function handleTextMessage(event) {
     }
 
   } else if (text.indexOf("ตั้ง") === 0) {
-    // คำสั่ง: ตั้ง max 35 / ตั้ง min 20 / ตั้ง max 35 Farm03
+    // คำสั่ง: ตั้ง max 35 / ตั้ง min 20 / ตั้ง bitmap fish / ตั้ง max 35 Farm03
     var parts = rawText.trim().split(/\s+/);
     if (parts.length >= 3) {
       var type = parts[1].toLowerCase();
-      var value = parseFloat(parts[2]);
+      var value = parts[2];
       var targetBoard = parts.length >= 4 ? parts.slice(3).join(" ") : "DEFAULT";
       
-      if (isNaN(value)) {
-        replyToLine(replyToken, "❌ ค่าไม่ถูกต้อง ลองใหม่ เช่น 'ตั้ง max 35'");
-      } else if (type === "max") {
-        saveThreshold(targetBoard, value, null);
-        var current = getThresholds(targetBoard);
-        replyToLine(replyToken, "✅ ตั้ง MAX " + targetBoard + ": " + current.maxTemp + " °C");
-      } else if (type === "min") {
-        saveThreshold(targetBoard, null, value);
-        var current = getThresholds(targetBoard);
-        replyToLine(replyToken, "✅ ตั้ง MIN " + targetBoard + ": " + current.minTemp + " °C");
+      if (type === "bitmap") {
+        // ตรวจสอบค่า bitmap ที่รองรับ
+        var validBitmaps = ["cat", "chicken", "fish", "tree"];
+        if (validBitmaps.indexOf(value) === -1) {
+          replyToLine(replyToken, "❌ Bitmap ไม่รู้จัก\nรองรับ: cat, chicken, fish, tree\nเช่น 'ตั้ง bitmap fish'");
+        } else {
+          saveThreshold(targetBoard, null, null, value);
+          var current = getThresholds(targetBoard);
+          replyToLine(replyToken, "✅ ตั้ง Bitmap " + targetBoard + ": " + current.bitmap);
+        }
+      } else if (type === "max" || type === "min") {
+        var numValue = parseFloat(value);
+        if (isNaN(numValue)) {
+          replyToLine(replyToken, "❌ ค่าไม่ถูกต้อง ลองใหม่ เช่น 'ตั้ง max 35'");
+        } else if (type === "max") {
+          saveThreshold(targetBoard, numValue, null);
+          var current = getThresholds(targetBoard);
+          replyToLine(replyToken, "✅ ตั้ง MAX " + targetBoard + ": " + current.maxTemp + " °C");
+        } else if (type === "min") {
+          saveThreshold(targetBoard, null, numValue);
+          var current = getThresholds(targetBoard);
+          replyToLine(replyToken, "✅ ตั้ง MIN " + targetBoard + ": " + current.minTemp + " °C");
+        }
       } else {
-        replyToLine(replyToken, "❌ ไม่รู้จัก ลอง 'ตั้ง max 35' หรือ 'ตั้ง min 20'");
+        replyToLine(replyToken, "❌ ไม่รู้จัก ลอง 'ตั้ง max 35', 'ตั้ง min 20' หรือ 'ตั้ง bitmap fish'");
       }
     } else {
-      replyToLine(replyToken, "❌ ข้อมูลไม่ครบ\nลอง: ตั้ง max 35 หรือ ตั้ง min 20\nเพิ่มชื่อบอร์ด: ตั้ง max 35 Farm03");
+      replyToLine(replyToken, "❌ ข้อมูลไม่ครบ\nลอง: ตั้ง max 35, ตั้ง min 20, ตั้ง bitmap fish\nเพิ่มชื่อบอร์ด: ตั้ง bitmap fish Farm03");
     }
 
   } else if (text === "ดูค่า" || text === "ตั้งค่า" || text === "ค่า") {
@@ -244,8 +257,9 @@ function handleTextMessage(event) {
             + "─────────────────\n"
             + "🌡️ MAX: " + t.maxTemp + " °C\n"
             + "🌡️ MIN: " + t.minTemp + " °C\n"
+            + "🖼️ Bitmap: " + t.bitmap + "\n"
             + "─────────────────\n"
-            + "เปลี่ยน: ตั้ง max 35 หรือ ตั้ง min 20";
+            + "เปลี่ยน: ตั้ง max 35, ตั้ง min 20, ตั้ง bitmap fish";
     replyToLine(replyToken, msg);
 
   } else if (["help", "ช่วยเหลือ", "คำสั่ง", "?"].indexOf(text) !== -1) {
@@ -255,10 +269,12 @@ function handleTextMessage(event) {
                  + "  → ข้อมูลอุณหภูมิและความชื้นล่าสุด\n\n"
                  + "• status / สถานะ / ทั้งหมด\n"
                  + "  → สรุปทุกบอร์ด\n\n"
-                 + "• สรุป / report / กราฟ [ชื่อบอร์ด]\n"
+                 + "• สรุป / report / กราฟ [บอร์ด]\n"
                  + "  → รายงานสรุปรายวัน 24 ชม. และกราฟสถิติ\n\n"
                  + "• ตั้ง max 35 / ตั้ง min 20 [บอร์ด]\n"
                  + "  → ตั้งค่าแจ้งเตือนอุณหภูมิ\n\n"
+                 + "• ตั้ง bitmap fish [บอร์ด]\n"
+                 + "  → ตั้งรูปแสดงผล (cat/chicken/fish/tree)\n\n"
                  + "• ดูค่า / ดูค่า [บอร์ด]\n"
                  + "  → ดูค่าตั้งปัจจุบัน\n\n"
                  + "• help / ช่วยเหลือ\n"
@@ -850,9 +866,13 @@ function saveThreshold(boardId, maxTemp, minTemp, bitmap) {
   }
   
   if (rowIndex > 0) {
-    sheet.getRange(rowIndex, 2, 1, 3).setValues([[maxTemp, minTemp, formattedTime]]);
+    // อ่านค่าเดิมของ bitmap ถ้าไม่ได้ส่งมา
+    var existingBitmap = data[rowIndex - 1][3] || DEFAULT_BITMAP;
+    var bitmapToSave = (bitmap !== undefined && bitmap !== null) ? bitmap : existingBitmap;
+    sheet.getRange(rowIndex, 2, 1, 4).setValues([[maxTemp, minTemp, bitmapToSave, formattedTime]]);
   } else {
-    sheet.appendRow([boardId, maxTemp, minTemp, formattedTime]);
+    var bitmapToSave = (bitmap !== undefined && bitmap !== null) ? bitmap : DEFAULT_BITMAP;
+    sheet.appendRow([boardId, maxTemp, minTemp, bitmapToSave, formattedTime]);
   }
 }
 

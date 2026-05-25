@@ -59,6 +59,10 @@ void setBitmap(const char* name) {
   }
   Serial.print("Unknown bitmap: ");
   Serial.println(name);
+  Serial.print("Fallback to: ");
+  Serial.println(DEFAULT_BITMAP);
+  // Fallback to default
+  setBitmap(DEFAULT_BITMAP);
 }
 
 const char* getCurrentBitmapName() {
