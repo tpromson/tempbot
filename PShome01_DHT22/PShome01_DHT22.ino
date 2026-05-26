@@ -156,6 +156,7 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 <hr/>
 <h3>Temperature Calibration</h3>
 <label>Temp Offset (C):</label><input name='temp_cal' value='%s' placeholder='e.g. -4.29'><br/>
+<label>Bitmap:</label><input name='bitmap' value='%s' placeholder='cat, chicken, fish, tree'><br/>
 <hr/>
 <h3>Auto OTA Settings</h3>
 <label>OTA Version URL:</label><input name='ota_version_url' value='%s' size='60'><br/>
@@ -167,7 +168,11 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 
 void handleRoot(){
   char buffer[2048];
-  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert, minHumidAlert, maxHumidAlert, otaPassword, staticIP, tempCalibrationStr, otaVersionUrl, otaBinUrl);
+  snprintf(buffer, sizeof(buffer), CONFIG_HTML, 
+    webAppUrl, timerDelayStr, lineToken, boardName, 
+    minTempAlert, maxTempAlert, minHumidAlert, maxHumidAlert, 
+    otaPassword, staticIP, tempCalibrationStr, bitmapName,
+    otaVersionUrl, otaBinUrl);
   server.send(200, "text/html", buffer);
 }
 
@@ -185,6 +190,14 @@ void handleSave(){
   if(server.hasArg("ota_version_url")) strncpy(otaVersionUrl, server.arg("ota_version_url").c_str(), sizeof(otaVersionUrl)-1);
   if(server.hasArg("ota_bin_url")) strncpy(otaBinUrl, server.arg("ota_bin_url").c_str(), sizeof(otaBinUrl)-1);
   if(server.hasArg("temp_cal")) strncpy(tempCalibrationStr, server.arg("temp_cal").c_str(), sizeof(tempCalibrationStr)-1);
+  if(server.hasArg("bitmap")) {
+    String bmp = server.arg("bitmap");
+    bmp.trim();
+    if (bmp.length() > 0 && bmp.length() < 20) {
+      bmp.toCharArray(bitmapName, 20);
+      setBitmap(bitmapName);
+    }
+  }
   // Save updated config to LittleFS
   saveConfig();
   server.send(200, "text/plain", "Config saved, rebooting...");
@@ -1216,15 +1229,15 @@ void setup() {
   } else {
     Serial.println("ArduinoOTA: Unprotected.");
   }
-  // Check for OTA updates on boot
-  checkForOTAUpdate();
-
   ArduinoOTA.begin();
   Serial.print("OTA ready! IP: ");
   Serial.println(WiFi.localIP());
   Serial.print("OTA port: 8266, Hostname: ");
   Serial.println(boardID.c_str());
   
+  // Check for OTA updates on boot (after ArduinoOTA is ready)
+  checkForOTAUpdate();
+
   if (WiFi.status() == WL_CONNECTED) {
     sendData();
   }
