@@ -147,14 +147,18 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 <label>Max Humid (%):</label><input name='max_humid' value='%s'><br/>
 <label>OTA Password:</label><input name='ota_pass' value='%s'><br/>
 <label>Static IP:</label><input name='static_ip' value='%s' placeholder='DHCP if empty'><br/>
+<hr/>
+<h3>Auto OTA Settings</h3>
+<label>OTA Version URL:</label><input name='ota_version_url' value='%s' size='60'><br/>
+<label>OTA Firmware URL:</label><input name='ota_bin_url' value='%s' size='60'><br/>
 <input type='submit' value='Save'>
 </form>
 </body></html>
 )HTML";
 
 void handleRoot(){
-  char buffer[1024];
-  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert, minHumidAlert, maxHumidAlert, otaPassword, staticIP);
+  char buffer[2048];
+  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert, minHumidAlert, maxHumidAlert, otaPassword, staticIP, otaVersionUrl, otaBinUrl);
   server.send(200, "text/html", buffer);
 }
 
@@ -169,6 +173,8 @@ void handleSave(){
   if(server.hasArg("max_humid")) strncpy(maxHumidAlert, server.arg("max_humid").c_str(), sizeof(maxHumidAlert)-1);
   if(server.hasArg("ota_pass")) strncpy(otaPassword, server.arg("ota_pass").c_str(), sizeof(otaPassword)-1);
   if(server.hasArg("static_ip")) strncpy(staticIP, server.arg("static_ip").c_str(), sizeof(staticIP)-1);
+  if(server.hasArg("ota_version_url")) strncpy(otaVersionUrl, server.arg("ota_version_url").c_str(), sizeof(otaVersionUrl)-1);
+  if(server.hasArg("ota_bin_url")) strncpy(otaBinUrl, server.arg("ota_bin_url").c_str(), sizeof(otaBinUrl)-1);
   // Save updated config to LittleFS
   saveConfig();
   server.send(200, "text/plain", "Config saved, rebooting...");
