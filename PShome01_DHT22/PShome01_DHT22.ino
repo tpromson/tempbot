@@ -3,15 +3,18 @@
 #include <WiFiClientSecure.h>
 #include <WiFiManager.h>
 #include <LittleFS.h>
+#include <ArduinoOTA.h>
 #include <DHT.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <ArduinoOTA.h>
+#include <ESP8266httpUpdate.h>
 #include <time.h>
 #include "bitmaps.h"
 #include <ESP8266WebServer.h>
 
+
+#define FIRMWARE_VERSION "1.0.0"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DHT22)
@@ -45,7 +48,9 @@ char boardName[32] = "";     // Custom Board Name (เช่น Kitchen, ServerR
 char bitmapName[20] = "cat"; // Bitmap set: cat, chicken, fish, tree
 char staticIP[16] = "";        // Static IP (empty = DHCP)
 char otaPassword[32] = "";   // ArduinoOTA update password
-unsigned long lastTime = 0;
+char otaVersionUrl[150] = ""; // URL to version.txt
+char otaBinUrl[150] = ""; // URL to firmware .bin
+
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
 
@@ -95,6 +100,8 @@ void saveConfig() {
     configFile.write((uint8_t*)minHumidAlert, sizeof(minHumidAlert));
     configFile.write((uint8_t*)maxHumidAlert, sizeof(maxHumidAlert));
     configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
+    configFile.write((uint8_t*)otaVersionUrl, sizeof(otaVersionUrl));
+    configFile.write((uint8_t*)otaBinUrl, sizeof(otaBinUrl));
     configFile.close();
   }
 }
@@ -273,56 +280,61 @@ void drawWiFiIcon(int x, int y) {
 void updateDisplay(float temp, float humid, String status) {
   display.clearDisplay();
   
-  // แถบแสดงสถานะด้านบน
+  // 1. แถบแสดงสถานะด้านบน (Top Bar)
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(shiftX, shiftY);
-  display.print("STATUS: "); 
+  display.setCursor(2 + shiftX, 1 + shiftY);
+  
+  // แสดงชื่อบอร์ดที่มุมบนซ้าย
+  String boardID = getBoardIdentifier();
+  display.print(boardID);
+  
+  // แสดงสถานะที่มุมบนขวา
+  display.setCursor(62 + shiftX, 1 + shiftY);
   display.print(status);
   
   drawWiFiIcon(115 + shiftX, shiftY);
   
-  display.drawFastHLine(0, 10 + shiftY, 128, WHITE);
+  // เส้นแบ่งแถบด้านบน
+  display.drawFastHLine(0, 10 + shiftX, 128, WHITE);
 
   if (temp > -100 && humid >= 0) {
     updateDailyMinMax(temp, humid);
 
-    // แสดงอุณหภูมิปัจจุบัน (ขนาดใหญ่เต็มจอฝั่งซ้าย)
-    display.setTextSize(4);
-    display.setCursor(2 + shiftX, 18 + shiftY);
+    // 2. พื้นที่แสดงผลฝั่งซ้าย (อุณหภูมิปัจจุบัน ขยับขึ้นมาตรงกลาง)
+    display.setTextSize(3);
+    display.setCursor(2 + shiftX, 20 + shiftY);
     display.print(temp, 1);
     
-    // แสดงความชื้น (Humidity) เป็น Bar Chart ฝั่งขวา
-    int barX = 108;
-    int barY = 22;
-    int barW = 12;
-    int barH = 30;
-    
-    // ตัวเลขความชื้นเหนือ Bar
-    display.setTextSize(1);
-    int textX = (humid >= 100) ? barX - 6 : barX - 3;
-    display.setCursor(textX + shiftX, barY - 10 + shiftY);
+    // 3. ไม่มีเส้นแบ่ง (Splitter removed for cleaner look)
+
+    // 4. พื้นที่แสดงผลฝั่งขวา (ความชื้นปัจจุบัน ขยับขึ้นมาตรงกลาง)
+    display.setTextSize(2);
+    display.setCursor(84 + shiftX, 18 + shiftY);
     display.print((int)humid);
     display.print("%");
     
-    // วาดกรอบ Bar
+    // แถบ Progress Bar แนวนอนสำหรับความชื้น
+    int barX = 84;
+    int barY = 40;
+    int barW = 38;
+    int barH = 5;
     display.drawRect(barX + shiftX, barY + shiftY, barW, barH, WHITE);
-    
-    // เติมแถบ Bar ตามเปอร์เซ็นต์ความชื้น
-    int fillH = (humid / 100.0) * barH;
-    if (fillH > barH) fillH = barH;
-    if (fillH < 0) fillH = 0;
-    display.fillRect(barX + shiftX, barY + barH - fillH + shiftY, barW, fillH, WHITE);
+    int fillW = (humid / 100.0) * barW;
+    if (fillW > barW) fillW = barW;
+    if (fillW < 0) fillW = 0;
+    display.fillRect(barX + shiftX, barY + shiftY, fillW, barH, WHITE);
   } else {
     display.setTextSize(2);
-    display.setCursor(10 + shiftX, 30 + shiftY);
+    display.setCursor(10 + shiftX, 25 + shiftY);
     display.print("SENSOR ERR");
   }
 
-  // แสดง IP Address หรือ NTP Time / Last Sync หรือ Min/Max ด้านล่าง
+  // 5. แถบแสดงข้อมูลสลับด้านล่าง (Bottom Bar - no separator line)
+  
   if (WiFi.status() == WL_CONNECTED) {
     display.setTextSize(1);
-    display.setCursor(5 + shiftX, 56 + shiftY);
+    display.setCursor(2 + shiftX, 56 + shiftY);
     
     int displayState = (millis() / 15000) % 4;
     time_t now = time(nullptr);
@@ -337,28 +349,31 @@ void updateDisplay(float temp, float humid, String status) {
     } else if (displayState == 1) {
       String currTime = formatTime(now, false);
       String syncTime = formatTime(lastSyncTimeEpoch, false);
-      display.print(currTime);
-      display.print(" | Sync ");
-      display.print(syncTime);
+      display.print("Time " + currTime + " | Sync " + syncTime);
     } else if (displayState == 2) {
       if (dailyMinTemp > 500.0 || dailyMaxTemp < -500.0) {
-        display.print("Temp L:-- H:--");
+        display.print("T Min/Max: --/--");
       } else {
-        display.print("Temp L:");
-        display.print((int)round(dailyMinTemp));
-        display.print(" H:");
-        display.print((int)round(dailyMaxTemp));
+        display.print("T Min/Max: ");
+        display.print(dailyMinTemp, 1);
+        display.print("/");
+        display.print(dailyMaxTemp, 1);
       }
     } else if (displayState == 3) {
       if (dailyMinHumid > 500.0 || dailyMaxHumid < -500.0) {
-        display.print("Humid L:-- H:--");
+        display.print("H Min/Max: --/--");
       } else {
-        display.print("Humid L:");
+        display.print("H Min/Max: ");
         display.print((int)round(dailyMinHumid));
-        display.print(" H:");
+        display.print("/");
         display.print((int)round(dailyMaxHumid));
+        display.print("%");
       }
     }
+  } else {
+    display.setTextSize(1);
+    display.setCursor(2 + shiftX, 56 + shiftY);
+    display.print("OFFLINE MODE");
   }
 
   display.display();
@@ -940,6 +955,8 @@ void setup() {
           configFile.readBytes(minHumidAlert, sizeof(minHumidAlert));
           configFile.readBytes(maxHumidAlert, sizeof(maxHumidAlert));
           configFile.readBytes(otaPassword, sizeof(otaPassword));
+    configFile.readBytes(otaVersionUrl, sizeof(otaVersionUrl));
+    configFile.readBytes(otaBinUrl, sizeof(otaBinUrl));
         } else if (fileSize >= 472) {
           // รูปแบบที่มีความชื้นและ boardName แต่ไม่มี bitmapName/staticIP/otaPassword
           configFile.readBytes(lineToken, sizeof(lineToken));
@@ -1060,7 +1077,12 @@ void setup() {
   WiFiManagerParameter custom_max_humid("max_humid", "Max Humid Alert (%)", maxHumidAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
   WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
-  WiFiManagerParameter custom_static_ip("static_ip", "Static IP (e.g. 192.168.0.150)", staticIP, 16);
+  WiFiManagerParameter custom_ota_version_url("ota_version_url", "OTA Version URL (version.txt)", otaVersionUrl, 150);
+  WiFiManagerParameter custom_ota_bin_url("ota_bin_url", "OTA Firmware URL (.bin)", otaBinUrl, 150);
+
+  wm.addParameter(&custom_ota_version_url);
+  wm.addParameter(&custom_ota_bin_url);
+
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -1141,6 +1163,8 @@ void setup() {
   strncpy(maxHumidAlert, custom_max_humid.getValue(), sizeof(maxHumidAlert));
   strncpy(boardName, custom_board_name.getValue(), sizeof(boardName));
   strncpy(otaPassword, custom_ota_password.getValue(), sizeof(otaPassword));
+  strncpy(otaVersionUrl, custom_ota_version_url.getValue(), sizeof(otaVersionUrl));
+  strncpy(otaBinUrl, custom_ota_bin_url.getValue(), sizeof(otaBinUrl));
 
   File configFile = LittleFS.open("/config.bin", "w");
   if (configFile) {
@@ -1154,6 +1178,8 @@ void setup() {
     configFile.write((uint8_t*)minHumidAlert, sizeof(minHumidAlert));
     configFile.write((uint8_t*)maxHumidAlert, sizeof(maxHumidAlert));
     configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
+    configFile.write((uint8_t*)otaVersionUrl, sizeof(otaVersionUrl));
+    configFile.write((uint8_t*)otaBinUrl, sizeof(otaBinUrl));
     configFile.close();
     Serial.println("Config saved to LittleFS.");
   }
@@ -1167,6 +1193,9 @@ void setup() {
   } else {
     Serial.println("ArduinoOTA: Unprotected.");
   }
+  // Check for OTA updates on boot
+  checkForOTAUpdate();
+
   ArduinoOTA.begin();
   Serial.print("OTA ready! IP: ");
   Serial.println(WiFi.localIP());
@@ -1179,10 +1208,97 @@ void setup() {
   lastTime = millis();
 }
 
+// --- Auto OTA Update ---
+void checkForOTAUpdate() {
+  if (strlen(otaVersionUrl) == 0 || strlen(otaBinUrl) == 0) {
+    Serial.println("OTA URLs not set, skipping OTA check.");
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected, skipping OTA check.");
+    return;
+  }
+
+  Serial.println("Checking for OTA firmware update...");
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(10, 20);
+  display.println("Checking for");
+  display.setCursor(10, 32);
+  display.println("firmware update...");
+  display.display();
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  if (!http.begin(client, otaVersionUrl)) {
+    Serial.println("Failed to begin HTTP for OTA version.");
+    return;
+  }
+  int httpCode = http.GET();
+  if (httpCode != 200) {
+    Serial.printf("OTA version check failed, HTTP code %d\n", httpCode);
+    http.end();
+    return;
+  }
+  String latestVersion = http.getString();
+  latestVersion.trim();
+  http.end();
+
+  Serial.printf("Current: %s, Latest: %s\n", FIRMWARE_VERSION, latestVersion.c_str());
+
+  if (latestVersion != String(FIRMWARE_VERSION)) {
+    Serial.printf("New firmware version %s available. Updating...\n", latestVersion.c_str());
+
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(10, 10);
+    display.println("OTA UPDATE");
+    display.setCursor(10, 25);
+    display.print("v");
+    display.print(FIRMWARE_VERSION);
+    display.print(" -> v");
+    display.println(latestVersion);
+    display.setCursor(10, 45);
+    display.println("Downloading...");
+    display.display();
+
+    t_httpUpdate_return ret = ESPhttpUpdate.update(client, otaBinUrl);
+    switch (ret) {
+      case HTTP_UPDATE_FAILED:
+        Serial.printf("OTA Update Failed: %s (%d)\n", ESPhttpUpdate.getLastErrorString().c_str(), ESPhttpUpdate.getLastError());
+        display.clearDisplay();
+        display.setTextSize(1);
+        display.setTextColor(WHITE);
+        display.setCursor(10, 20);
+        display.println("OTA FAILED!");
+        display.setCursor(10, 35);
+        display.println(ESPhttpUpdate.getLastErrorString().c_str());
+        display.display();
+        delay(3000);
+        break;
+      case HTTP_UPDATE_NO_UPDATES:
+        Serial.println("No OTA updates available.");
+        break;
+      case HTTP_UPDATE_OK:
+        Serial.println("OTA Update successful, rebooting...");
+        break; // Device will reboot automatically
+    }
+  } else {
+    Serial.println("Firmware is up to date.");
+  }
+}
+
 // --- 6. Loop ---
+unsigned long lastOTACheck = 0;
+const unsigned long OTA_CHECK_INTERVAL = 12UL * 60 * 60 * 1000; // 12 hours
+
 void loop() {
   ArduinoOTA.handle();
   server.handleClient();
+  // Rest of loop code unchanged
   // If Wi‑Fi just came back up and we have buffered entries, flush them
   static bool lastWiFiConnected = false;
   bool currentWiFiConnected = (WiFi.status() == WL_CONNECTED);
@@ -1348,5 +1464,14 @@ void loop() {
     // }
     
     lastUpdate = currentMillis;
+  }
+
+  // 4. ตรวจสอบ OTA อัปเดตเป็นระยะ (ทุก 12 ชั่วโมง)
+  if (strlen(otaVersionUrl) > 0 && strlen(otaBinUrl) > 0) {
+    unsigned long nowMillis = millis();
+    if (nowMillis - lastOTACheck >= OTA_CHECK_INTERVAL) {
+      lastOTACheck = nowMillis;
+      checkForOTAUpdate();
+    }
   }
 }
