@@ -905,6 +905,10 @@ void openConfigPortal() {
   WiFiManagerParameter custom_max_humid("max_humid", "Max Humid Alert (%)", maxHumidAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
   WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
+  WiFiManagerParameter custom_ota_version_url("ota_version_url", "OTA Version URL", otaVersionUrl, 150);
+  WiFiManagerParameter custom_ota_bin_url("ota_bin_url", "OTA Firmware URL", otaBinUrl, 150);
+  WiFiManagerParameter custom_temp_cal("temp_cal", "Temp Calibration Offset (C)", tempCalibrationStr, 10);
+  WiFiManagerParameter custom_bitmap("bitmap", "Bitmap (cat/chicken/fish/tree)", bitmapName, 20);
   WiFiManagerParameter custom_static_ip("static_ip", "Static IP (e.g. 192.168.0.150)", staticIP, 16);
   
   wm.addParameter(&custom_url);
@@ -917,6 +921,10 @@ void openConfigPortal() {
   wm.addParameter(&custom_max_humid);
   wm.addParameter(&custom_board_name);
   wm.addParameter(&custom_ota_password);
+  wm.addParameter(&custom_ota_version_url);
+  wm.addParameter(&custom_ota_bin_url);
+  wm.addParameter(&custom_temp_cal);
+  wm.addParameter(&custom_bitmap);
   wm.addParameter(&custom_static_ip);
 
   wm.setConfigPortalTimeout(120); // ปิด portal อัตโนมัติใน 2 นาที
@@ -945,6 +953,11 @@ void openConfigPortal() {
   strncpy(maxHumidAlert, custom_max_humid.getValue(), sizeof(maxHumidAlert));
   strncpy(boardName, custom_board_name.getValue(), sizeof(boardName));
   strncpy(otaPassword, custom_ota_password.getValue(), sizeof(otaPassword));
+  strncpy(otaVersionUrl, custom_ota_version_url.getValue(), sizeof(otaVersionUrl));
+  strncpy(otaBinUrl, custom_ota_bin_url.getValue(), sizeof(otaBinUrl));
+  strncpy(tempCalibrationStr, custom_temp_cal.getValue(), sizeof(tempCalibrationStr));
+  strncpy(bitmapName, custom_bitmap.getValue(), sizeof(bitmapName));
+  if (strlen(bitmapName) > 0) setBitmap(bitmapName);
 
   // บันทึกลง LittleFS
   saveConfig();
