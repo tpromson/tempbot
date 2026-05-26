@@ -70,6 +70,7 @@ float dailyMinHumid = 999.0;
 float dailyMaxHumid = -999.0;
 int lastDayOfMinMax = -1;
 unsigned long lastSyncTimeEpoch = 0;
+unsigned long lastTime = 0;
 
 String formatTime(time_t epoch, bool includeSeconds) {
   if (epoch < 1000000000) {
@@ -1079,6 +1080,7 @@ void setup() {
   WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
   WiFiManagerParameter custom_ota_version_url("ota_version_url", "OTA Version URL (version.txt)", otaVersionUrl, 150);
   WiFiManagerParameter custom_ota_bin_url("ota_bin_url", "OTA Firmware URL (.bin)", otaBinUrl, 150);
+  WiFiManagerParameter custom_static_ip("static_ip", "Static IP (e.g. 192.168.0.150)", staticIP, 16);
 
   wm.addParameter(&custom_ota_version_url);
   wm.addParameter(&custom_ota_bin_url);
