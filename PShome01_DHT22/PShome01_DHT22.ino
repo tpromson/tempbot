@@ -50,6 +50,7 @@ char staticIP[16] = "";        // Static IP (empty = DHCP)
 char otaPassword[32] = "";   // ArduinoOTA update password
 char otaVersionUrl[150] = ""; // URL to version.txt
 char otaBinUrl[150] = ""; // URL to firmware .bin
+char tempCalibrationStr[10] = "0.0"; // Temperature calibration offset
 
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
@@ -86,6 +87,10 @@ String formatTime(time_t epoch, bool includeSeconds) {
   return String(buffer);
 }
 
+float getTempCalibrationOffset() {
+  return atof(tempCalibrationStr);
+}
+
 void saveConfig() {
   File configFile = LittleFS.open("/config.bin", "w");
   if (configFile) {
@@ -103,6 +108,7 @@ void saveConfig() {
     configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
     configFile.write((uint8_t*)otaVersionUrl, sizeof(otaVersionUrl));
     configFile.write((uint8_t*)otaBinUrl, sizeof(otaBinUrl));
+    configFile.write((uint8_t*)tempCalibrationStr, sizeof(tempCalibrationStr));
     configFile.close();
   }
 }
@@ -148,6 +154,9 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 <label>OTA Password:</label><input name='ota_pass' value='%s'><br/>
 <label>Static IP:</label><input name='static_ip' value='%s' placeholder='DHCP if empty'><br/>
 <hr/>
+<h3>Temperature Calibration</h3>
+<label>Temp Offset (C):</label><input name='temp_cal' value='%s' placeholder='e.g. -4.29'><br/>
+<hr/>
 <h3>Auto OTA Settings</h3>
 <label>OTA Version URL:</label><input name='ota_version_url' value='%s' size='60'><br/>
 <label>OTA Firmware URL:</label><input name='ota_bin_url' value='%s' size='60'><br/>
@@ -158,7 +167,7 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 
 void handleRoot(){
   char buffer[2048];
-  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert, minHumidAlert, maxHumidAlert, otaPassword, staticIP, otaVersionUrl, otaBinUrl);
+  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert, minHumidAlert, maxHumidAlert, otaPassword, staticIP, tempCalibrationStr, otaVersionUrl, otaBinUrl);
   server.send(200, "text/html", buffer);
 }
 
@@ -175,6 +184,7 @@ void handleSave(){
   if(server.hasArg("static_ip")) strncpy(staticIP, server.arg("static_ip").c_str(), sizeof(staticIP)-1);
   if(server.hasArg("ota_version_url")) strncpy(otaVersionUrl, server.arg("ota_version_url").c_str(), sizeof(otaVersionUrl)-1);
   if(server.hasArg("ota_bin_url")) strncpy(otaBinUrl, server.arg("ota_bin_url").c_str(), sizeof(otaBinUrl)-1);
+  if(server.hasArg("temp_cal")) strncpy(tempCalibrationStr, server.arg("temp_cal").c_str(), sizeof(tempCalibrationStr)-1);
   // Save updated config to LittleFS
   saveConfig();
   server.send(200, "text/plain", "Config saved, rebooting...");
@@ -546,9 +556,9 @@ void sendData() {
   float t = dht.readTemperature();
   float h = dht.readHumidity();
 
-  // --- ปรับค่า Calibration Offset ให้ตรงกับ DS18B20 ---
+  // --- ปรับค่า Calibration Offset ---
   if (!isnan(t)) {
-    t = t - 4.29; 
+    t = t + getTempCalibrationOffset(); 
   }
 
   if (isnan(t) || isnan(h)) {
@@ -950,8 +960,8 @@ void setup() {
         size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
-        if (fileSize >= 540) {
-          // รูปแบบใหม่ล่าสุด: มี bitmapName + staticIP
+        if (fileSize >= 550) {
+          // รูปแบบใหม่ล่าสุด: มี tempCalibrationStr
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
@@ -964,6 +974,7 @@ void setup() {
           configFile.readBytes(otaPassword, sizeof(otaPassword));
     configFile.readBytes(otaVersionUrl, sizeof(otaVersionUrl));
     configFile.readBytes(otaBinUrl, sizeof(otaBinUrl));
+    configFile.readBytes(tempCalibrationStr, sizeof(tempCalibrationStr));
         } else if (fileSize >= 472) {
           // รูปแบบที่มีความชื้นและ boardName แต่ไม่มี bitmapName/staticIP/otaPassword
           configFile.readBytes(lineToken, sizeof(lineToken));
@@ -1086,10 +1097,12 @@ void setup() {
   WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
   WiFiManagerParameter custom_ota_version_url("ota_version_url", "OTA Version URL (version.txt)", otaVersionUrl, 150);
   WiFiManagerParameter custom_ota_bin_url("ota_bin_url", "OTA Firmware URL (.bin)", otaBinUrl, 150);
+  WiFiManagerParameter custom_temp_cal("temp_cal", "Temp Calibration Offset (C)", tempCalibrationStr, 10);
   WiFiManagerParameter custom_static_ip("static_ip", "Static IP (e.g. 192.168.0.150)", staticIP, 16);
 
   wm.addParameter(&custom_ota_version_url);
   wm.addParameter(&custom_ota_bin_url);
+  wm.addParameter(&custom_temp_cal);
 
   
   wm.addParameter(&custom_url);
@@ -1173,6 +1186,7 @@ void setup() {
   strncpy(otaPassword, custom_ota_password.getValue(), sizeof(otaPassword));
   strncpy(otaVersionUrl, custom_ota_version_url.getValue(), sizeof(otaVersionUrl));
   strncpy(otaBinUrl, custom_ota_bin_url.getValue(), sizeof(otaBinUrl));
+  strncpy(tempCalibrationStr, custom_temp_cal.getValue(), sizeof(tempCalibrationStr));
 
   File configFile = LittleFS.open("/config.bin", "w");
   if (configFile) {
@@ -1188,6 +1202,7 @@ void setup() {
     configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
     configFile.write((uint8_t*)otaVersionUrl, sizeof(otaVersionUrl));
     configFile.write((uint8_t*)otaBinUrl, sizeof(otaBinUrl));
+    configFile.write((uint8_t*)tempCalibrationStr, sizeof(tempCalibrationStr));
     configFile.close();
     Serial.println("Config saved to LittleFS.");
   }
@@ -1446,9 +1461,9 @@ void loop() {
     float t = dht.readTemperature();
     float h = dht.readHumidity();
     
-    // --- ปรับค่า Calibration Offset ให้ตรงกับ DS18B20 ---
+    // --- ปรับค่า Calibration Offset ---
     if (!isnan(t)) {
-      t = t - 4.29; 
+      t = t + getTempCalibrationOffset(); 
     }
     
     if (isnan(t) || isnan(h)) {
