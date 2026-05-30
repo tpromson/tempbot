@@ -30,7 +30,7 @@
 
 // Offline Data Queue
 #define QUEUE_FILE        "/queue.csv"
-#define MAX_QUEUE_ENTRIES 32
+#define MAX_QUEUE_ENTRIES 96
 
 // --- 2. Objects ---
 DHT dht(SENSOR_PIN, DHTTYPE);
@@ -71,6 +71,7 @@ float dailyMinHumid = 999.0;
 float dailyMaxHumid = -999.0;
 int lastDayOfMinMax = -1;
 unsigned long lastSyncTimeEpoch = 0;
+unsigned long lastSyncTimeMillis = 0;
 unsigned long lastTime = 0;
 
 String formatTime(time_t epoch, bool includeSeconds) {
@@ -430,12 +431,30 @@ int getQueueSize() {
 void queueData(float temp, float humid) {
   int size = getQueueSize();
   if (size >= MAX_QUEUE_ENTRIES) {
-    Serial.println("Queue full! Entry dropped.");
-    return;
+    // Queue full → remove oldest entry to make room for new data
+    Serial.println("Queue full! Removing oldest entry...");
+    File f = LittleFS.open(QUEUE_FILE, "r");
+    if (f) {
+      String remaining = "";
+      f.readStringUntil('\n'); // Skip oldest line
+      while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() > 2) remaining += line + "\n";
+      }
+      f.close();
+      File fw = LittleFS.open(QUEUE_FILE, "w");
+      if (fw) { fw.print(remaining); fw.close(); }
+    }
+    size = getQueueSize(); // Re-check size after removal
   }
   File f = LittleFS.open(QUEUE_FILE, "a");
   if (f) {
     time_t now = time(nullptr);
+    if (now < 1000000000 && lastSyncTimeEpoch >= 1000000000) {
+      unsigned long elapsed = (millis() - lastSyncTimeMillis) / 1000;
+      now = lastSyncTimeEpoch + elapsed;
+    }
     f.println(String(now) + "," + String(temp, 1) + "," + String(humid, 1));
     f.close();
     Serial.print("Queued. Size: "); Serial.println(size + 1);
@@ -540,6 +559,7 @@ void flushQueue() {
 
   if (sentCount > 0) {
     lastSyncTimeEpoch = time(nullptr);
+    lastSyncTimeMillis = millis();
   }
 
   if (sentCount >= entryCount) {
@@ -587,16 +607,11 @@ void sendData() {
                    + "Board: " + boardID + "\n"
                    + "IP: " + ipAddr + "\n"
                    + "Status: SENSOR ERROR\n"
-                   + "DHT22 not responding!\n"
-                   + "Auto reboot after 10 failed attempts";
+                   + "DHT22 not responding!";
       sendLineNotify(message);
       lastSensorErrorNotifyTime = millis();
     }
     
-    if (failedSyncCount >= 10) {
-      playAnimation(2, "WATCHDOG REBOOT");
-      delay(1000); ESP.restart();
-    }
     return;
   }
   currentTemp  = t;
@@ -608,10 +623,6 @@ void sendData() {
     int qs = getQueueSize();
     currentStatus = "BUFFERED:" + String(qs);
     failedSyncCount++;
-    if (failedSyncCount >= 10) {
-      playAnimation(2, "WATCHDOG REBOOT");
-      delay(1000); ESP.restart();
-    }
     return;
   }
 
@@ -636,6 +647,7 @@ void sendData() {
       failedSyncCount = 0;
       syncSuccess = true;
       lastSyncTimeEpoch = time(nullptr);
+      lastSyncTimeMillis = millis();
       
       // ดึง threshold จาก GAS
       String settingsUrl = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(boardID);
@@ -690,11 +702,7 @@ void sendData() {
 
   if (!syncSuccess) {
     failedSyncCount++;
-    Serial.print("Watchdog: Failed sync count = "); Serial.println(failedSyncCount);
-    if (failedSyncCount >= 10) {
-      playAnimation(2, "WATCHDOG REBOOT");
-      delay(1000); ESP.restart();
-    }
+    Serial.print("Failed sync count = "); Serial.println(failedSyncCount);
   } else {
     // ส่งสำเร็จ → flush ข้อมูลที่ค้างอยู่ใน queue
     flushQueue();
