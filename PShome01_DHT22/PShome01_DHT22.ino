@@ -14,7 +14,7 @@
 #include <ESP8266WebServer.h>
 
 
-#define FIRMWARE_VERSION "1.0.0"
+#define FIRMWARE_VERSION "1.0.1"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DHT22)
