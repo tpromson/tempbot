@@ -17,7 +17,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.3"
+#define FIRMWARE_VERSION "1.0.4"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DS18B20)
@@ -457,9 +457,12 @@ void flushQueue() {
     if (http.begin(client, url)) {
       http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
       http.setTimeout(10000);
+      ESP.wdtDisable();
       int code = http.GET();
-      ok = (code == 200);
-      if (!ok) Serial.println("Flush entry " + String(i) + " failed: HTTP " + String(code));
+      String body = (code == 200) ? http.getString() : "";
+      ESP.wdtEnable(8000);
+      ok = (code == 200 && body.startsWith("OK"));
+      if (!ok) Serial.println("Flush entry " + String(i) + " failed: HTTP " + String(code) + " body=" + body.substring(0, 16));
       http.end();
     } else {
       Serial.println("Flush entry " + String(i) + " http.begin failed");
@@ -551,10 +554,13 @@ bool syncToGAS(WiFiClientSecure &client) {
   }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setTimeout(10000);
+  ESP.wdtDisable();                     // กัน soft WDT ตอน GAS ตอบช้า (cold start ~6s)
   int httpCode = http.GET();
-  if (httpCode != 200) {
+  String payload = (httpCode == 200) ? http.getString() : "";
+  ESP.wdtEnable(8000);
+  if (httpCode != 200 || !payload.startsWith("OK")) {  // ต้องได้ body "OK" จริง ไม่ใช่หน้า error ที่ GAS ห่อเป็น 200
     currentStatus = "ERR " + String(httpCode);
-    Serial.println("syncToGAS: HTTP " + String(httpCode));
+    Serial.println("syncToGAS: HTTP " + String(httpCode) + " body=" + payload.substring(0, 16));
     http.end();
     return false;
   }
@@ -572,7 +578,10 @@ void fetchAndApplySettings(WiFiClientSecure &client) {
   if (!http.begin(client, url)) { Serial.println("fetchSettings: http.begin failed"); return; }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setTimeout(10000);
-  if (http.GET() != 200) { Serial.println("fetchSettings: HTTP != 200"); http.end(); return; }
+  ESP.wdtDisable();
+  int sc = http.GET();
+  ESP.wdtEnable(8000);
+  if (sc != 200) { Serial.println("fetchSettings: HTTP != 200"); http.end(); return; }
   String payload = http.getString();
   http.end();
   JsonDocument doc;
