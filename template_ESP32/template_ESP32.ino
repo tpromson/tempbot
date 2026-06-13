@@ -289,6 +289,8 @@ void flushQueue() {
   display.print(" buffered entries");
   display.display();
 
+  WiFiClientSecure client;
+  client.setInsecure();
   String boardID = getBoardIdentifier();
 
   int sentCount = 0;
@@ -304,19 +306,15 @@ void flushQueue() {
     String humidStr = "";
 
     if (secondComma < 0) {
-      // Backward compatibility: old format (temp,humid)
       tempStr = entries[i].substring(0, firstComma);
       humidStr = entries[i].substring(firstComma + 1);
     } else {
-      // New format (timestamp,temp,humid)
       timestampStr = entries[i].substring(0, firstComma);
       tempStr = entries[i].substring(firstComma + 1, secondComma);
       humidStr = entries[i].substring(secondComma + 1);
     }
 
-    WiFiClientSecure client;
     HTTPClient http;
-    client.setInsecure();
     String url = String(webAppUrl) + "?temperature=" + tempStr
                + "&humidity=" + humidStr
                + "&board_id=" + urlEncode(boardID)
@@ -329,10 +327,14 @@ void flushQueue() {
     if (http.begin(client, url)) {
       http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
       http.setTimeout(10000);
-      ok = (http.GET() == 200);
+      int code = http.GET();
+      ok = (code == 200);
+      if (!ok) Serial.println("Flush entry " + String(i) + " failed: HTTP " + String(code));
       http.end();
+    } else {
+      Serial.println("Flush entry " + String(i) + " http.begin failed");
     }
-    client.stop(); // ⚡ ปลดปล่อยซ็อกเก็ตเครือข่ายและหน่วยความจำทันทีหลังเสร็จสิ้นแต่ละช่อง
+    client.stop();
 
     if (ok) {
       sentCount++;
@@ -344,10 +346,10 @@ void flushQueue() {
       display.print(entryCount);
       display.display();
     } else {
-      break; // WiFi หลุดหรือ server error → หยุดและลองใหม่รอบหน้า
+      break;
     }
     ArduinoOTA.handle();
-    delay(500); // ⚡ เพิ่มเวลาพักเล็กน้อยให้หน่วยความจำเครือข่ายของระบบคืนค่า
+    delay(500);
     yield();
   }
 
@@ -389,17 +391,18 @@ void saveConfig() {
 
 // --- 6. Logic Functions ---
 
-void sendData() {
-  // ตรวจสอบว่ามี URL ตั้งค่าไว้แล้วก่อน
+// --- 6.1 Helper functions ---
+bool validateWebAppUrl() {
   if (strlen(webAppUrl) < 10) {
     currentStatus = "NO URL";
-    return;
+    return false;
   }
+  return true;
+}
 
-  // อ่านค่าเซนเซอร์เสมอ ไม่ว่า WiFi จะต่ออยู่หรือไม่
+bool readSensorData() {
   sensors.requestTemperatures();
-  delay(750); // รอ DS18B20 แปลงค่า 12-bit
-
+  delay(750);
   float t = sensors.getTempCByIndex(0);
   if (t == DEVICE_DISCONNECTED_C || t < -55.0 || t > 125.0) {
     currentStatus = "SENS ERR";
@@ -408,90 +411,101 @@ void sendData() {
       playCatAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
-    return;
+    return false;
   }
   currentTemp = t;
+  return true;
+}
 
-  // WiFi ไม่ต่อ → เก็บข้อมูลใน Offline Queue
+bool checkWiFiConnected() {
   if (WiFi.status() != WL_CONNECTED) {
-    queueData(t, 0.0);
-    int qs = getQueueSize();
-    currentStatus = "BUFFERED:" + String(qs);
+    queueData(currentTemp, 0.0);
+    currentStatus = "BUFFERED:" + String(getQueueSize());
     failedSyncCount++;
     if (failedSyncCount >= 10) {
       playCatAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
+    return false;
+  }
+  return true;
+}
+
+bool syncToGAS(WiFiClientSecure &client) {
+  HTTPClient http;
+  String url = String(webAppUrl) + "?temperature=" + String(currentTemp, 1) + "&humidity=0&board_id=" + urlEncode(getBoardIdentifier());
+  if (!http.begin(client, url)) {
+    currentStatus = "ERR HTTP_BEGIN";
+    Serial.println("syncToGAS: http.begin failed");
+    return false;
+  }
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(10000);
+  int httpCode = http.GET();
+  if (httpCode != 200) {
+    currentStatus = "ERR " + String(httpCode);
+    Serial.println("syncToGAS: HTTP " + String(httpCode));
+    http.end();
+    return false;
+  }
+  currentStatus = "SYNCED";
+  failedSyncCount = 0;
+  lastSyncTimeEpoch = time(nullptr);
+  http.end();
+  return true;
+}
+
+void fetchAndApplySettings(WiFiClientSecure &client) {
+  HTTPClient http;
+  String url = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(getBoardIdentifier());
+  if (!http.begin(client, url)) { Serial.println("fetchSettings: http.begin failed"); return; }
+  if (http.GET() != 200) { Serial.println("fetchSettings: HTTP != 200"); http.end(); return; }
+  String payload = http.getString();
+  http.end();
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    Serial.print("JSON parse error: "); Serial.println(err.c_str());
     return;
   }
+  bool changed = false;
+  if (!doc["maxTemp"].isNull()) {
+    String maxStr = String((float)doc["maxTemp"], 1);
+    maxStr.toCharArray(maxTempAlert, sizeof(maxTempAlert));
+    changed = true;
+  }
+  if (!doc["minTemp"].isNull()) {
+    String minStr = String((float)doc["minTemp"], 1);
+    minStr.toCharArray(minTempAlert, sizeof(minTempAlert));
+    changed = true;
+  }
+  if (changed) saveConfig();
+  Serial.println("Settings updated from GAS");
+}
 
-  // WiFi ต่ออยู่ → ส่งข้อมูลปกติ
+void incrementFailCount() {
+  failedSyncCount++;
+  Serial.print("Watchdog: Failed sync count = "); Serial.println(failedSyncCount);
+  if (failedSyncCount >= 10) {
+    playCatAnimation(2, "WATCHDOG REBOOT");
+    delay(1000); ESP.restart();
+  }
+}
+
+// --- 6.2 sendData coordinator ---
+void sendData() {
+  if (!validateWebAppUrl()) return;
+  if (!readSensorData()) return;
+  if (!checkWiFiConnected()) return;
+
   WiFiClientSecure client;
-  HTTPClient http;
   client.setInsecure();
 
-  String boardID = getBoardIdentifier();
-
-  String url = String(webAppUrl) + "?temperature=" + String(t, 1)
-             + "&humidity=0&board_id=" + urlEncode(boardID);
-
-  bool syncSuccess = false;
-  if (http.begin(client, url)) {
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    http.setTimeout(10000);
-    int httpCode = http.GET();
-    if (httpCode == 200) {
-      currentStatus = "SYNCED";
-      failedSyncCount = 0;
-      syncSuccess = true;
-      lastSyncTimeEpoch = time(nullptr);
-      
-      // ดึง threshold จาก GAS
-      String settingsUrl = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(boardID);
-      if (http.begin(client, settingsUrl)) {
-        int settingsCode = http.GET();
-        if (settingsCode == 200) {
-          String payload = http.getString();
-          JsonDocument doc;
-          DeserializationError err = deserializeJson(doc, payload);
-          if (!err) {
-            bool settingsChanged = false;
-            if (!doc["maxTemp"].isNull()) {
-              String maxStr = String((float)doc["maxTemp"], 1);
-              maxStr.toCharArray(maxTempAlert, sizeof(maxTempAlert));
-              settingsChanged = true;
-            }
-            if (!doc["minTemp"].isNull()) {
-              String minStr = String((float)doc["minTemp"], 1);
-              minStr.toCharArray(minTempAlert, sizeof(minTempAlert));
-              settingsChanged = true;
-            }
-            if (settingsChanged) saveConfig();
-            Serial.println("Settings updated from GAS");
-          } else {
-            Serial.print("JSON parse error: "); Serial.println(err.c_str());
-          }
-        }
-        http.end();
-      }
-    } else {
-      currentStatus = "ERR " + String(httpCode);
-    }
-    http.end();
-  } else {
-    currentStatus = "ERR HTTP_BEGIN";
-  }
-
-  if (!syncSuccess) {
-    failedSyncCount++;
-    Serial.print("Watchdog: Failed sync count = "); Serial.println(failedSyncCount);
-    if (failedSyncCount >= 10) {
-      playCatAnimation(2, "WATCHDOG REBOOT");
-      delay(1000); ESP.restart();
-    }
-  } else {
-    // ส่งสำเร็จ → flush ข้อมูลที่ค้างอยู่ใน queue
+  if (syncToGAS(client)) {
+    fetchAndApplySettings(client);
     flushQueue();
+  } else {
+    incrementFailCount();
   }
 }
 
