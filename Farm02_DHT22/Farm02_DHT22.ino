@@ -16,7 +16,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.5"
+#define FIRMWARE_VERSION "1.0.6"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DHT22)
@@ -1088,7 +1088,7 @@ void checkForOTAUpdate() {
 
   WiFiClientSecure client;
   client.setInsecure();
-  client.setBufferSizes(4096, 1024); // จำกัด TLS buffer กัน OOM
+  client.setBufferSizes(16384, 512);  // github ส่ง TLS record ใหญ่ — RX ต้องใหญ่พอ ไม่งั้นดาวน์โหลด .bin ค้าง (stream read timeout)
   HTTPClient http;
   if (!http.begin(client, otaVersionUrl)) {
     Serial.println("Failed to begin HTTP for OTA version.");
