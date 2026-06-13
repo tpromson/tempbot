@@ -12,6 +12,8 @@
 #include <time.h>
 #include "bitmaps.h"
 #include <ESP8266WebServer.h>
+#include <tempbot_common.h>
+#include <ArduinoJson.h>
 
 
 #define FIRMWARE_VERSION "1.0.1"
@@ -36,7 +38,7 @@
 DHT dht(SENSOR_PIN, DHTTYPE);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-char webAppUrl[150] = "https://script.google.com/macros/s/AKfycbye8FCPMGel-f_FnCju3gXJnf6IKmJ6B3pr1ymaVx7wIKwf0Su0CCaUKRuv4uj6Yts2/exec";
+char webAppUrl[150] = "";
 char timerDelayStr[10] = "10";
 char lineToken[200]  = "";   // LINE Messaging API Channel Access Token
 char lineGroupId[40] = "";
@@ -73,24 +75,6 @@ int lastDayOfMinMax = -1;
 unsigned long lastSyncTimeEpoch = 0;
 unsigned long lastSyncTimeMillis = 0;
 unsigned long lastTime = 0;
-
-String formatTime(time_t epoch, bool includeSeconds) {
-  if (epoch < 1000000000) {
-    return "--:--";
-  }
-  struct tm* timeinfo = localtime(&epoch);
-  char buffer[10];
-  if (includeSeconds) {
-    sprintf(buffer, "%02d:%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-  } else {
-    sprintf(buffer, "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
-  }
-  return String(buffer);
-}
-
-float getTempCalibrationOffset() {
-  return atof(tempCalibrationStr);
-}
 
 void saveConfig() {
   File configFile = LittleFS.open("/config.bin", "w");
@@ -222,16 +206,6 @@ void handleQueue() {
   }
   f.close();
   server.send(200, "text/plain", content);
-}
-
-String getBoardIdentifier() {
-  String bName = String(boardName);
-  bName.trim();
-  if (bName.length() == 0) {
-    bName = "BOARD_" + String(ESP.getChipId(), HEX);
-    bName.toUpperCase();
-  }
-  return bName;
 }
 
 String currentStatus = "STARTING";
@@ -655,40 +629,34 @@ void sendData() {
         int settingsCode = http.GET();
         if (settingsCode == 200) {
           String payload = http.getString();
-          int maxPos = payload.indexOf("\"maxTemp\":");
-          int minPos = payload.indexOf("\"minTemp\":");
-          if (maxPos != -1) {
-            int endPos = payload.indexOf(",", maxPos);
-            if (endPos == -1) endPos = payload.indexOf("}", maxPos);
-            String maxStr = payload.substring(maxPos + 9, endPos);
-            maxStr.trim();
-            if (maxStr.length() > 0) {
-              maxStr.toCharArray(maxTempAlert, 10);
-              saveConfig();
+          JsonDocument doc;
+          DeserializationError err = deserializeJson(doc, payload);
+          if (!err) {
+            bool settingsChanged = false;
+            if (!doc["maxTemp"].isNull()) {
+              String maxStr = String((float)doc["maxTemp"], 1);
+              maxStr.toCharArray(maxTempAlert, sizeof(maxTempAlert));
+              settingsChanged = true;
             }
-          }
-          if (minPos != -1) {
-            int endPos = payload.indexOf("}", minPos);
-            String minStr = payload.substring(minPos + 9, endPos);
-            minStr.trim();
-            if (minStr.length() > 0) {
-              minStr.toCharArray(minTempAlert, 10);
+            if (!doc["minTemp"].isNull()) {
+              String minStr = String((float)doc["minTemp"], 1);
+              minStr.toCharArray(minTempAlert, sizeof(minTempAlert));
+              settingsChanged = true;
             }
-          }
-          // ดึง bitmap จาก GAS
-          int bitmapPos = payload.indexOf("\"bitmap\":");
-          if (bitmapPos != -1) {
-            int endPos = payload.indexOf("\"", bitmapPos + 9);
-            if (endPos == -1) endPos = payload.indexOf("}", bitmapPos);
-            String bitmapStr = payload.substring(bitmapPos + 9, endPos);
-            bitmapStr.trim();
-            if (bitmapStr.length() > 0 && bitmapStr.length() < 20) {
-              bitmapStr.toCharArray(bitmapName, 20);
-              Serial.print("Bitmap updated from GAS: ");
-              Serial.println(bitmapName);
+            if (!doc["bitmap"].isNull() && doc["bitmap"].is<const char*>()) {
+              const char* bmp = doc["bitmap"].as<const char*>();
+              if (strlen(bmp) > 0 && strlen(bmp) < sizeof(bitmapName)) {
+                strncpy(bitmapName, bmp, sizeof(bitmapName) - 1);
+                bitmapName[sizeof(bitmapName) - 1] = '\0';
+                Serial.print("Bitmap updated from GAS: ");
+                Serial.println(bitmapName);
+              }
             }
+            if (settingsChanged) saveConfig();
+            Serial.println("Settings updated from GAS");
+          } else {
+            Serial.print("JSON parse error: "); Serial.println(err.c_str());
           }
-          Serial.println("Settings updated from GAS");
         }
         http.end();
       }
@@ -710,172 +678,6 @@ void sendData() {
 }
 
 
-String urlEncode(String str) {
-  String encoded = "";
-  char buf[4];
-  for (unsigned int i = 0; i < str.length(); i++) {
-    char c = str.charAt(i);
-    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-        c == '-' || c == '_' || c == '.' || c == '~') {
-      encoded += c;
-    } else {
-      sprintf(buf, "%%%02X", (unsigned char)c);
-      encoded += buf;
-    }
-  }
-  return encoded;
-}
-
-void sendLineNotify(String message) {
-  String tokenStr = String(lineToken);
-  tokenStr.trim();
-  String groupIdStr = String(lineGroupId);
-  groupIdStr.trim();
-
-  if (tokenStr.length() == 0 || groupIdStr.length() == 0) return;
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-
-  if (http.begin(client, "https://api.line.me/v2/bot/message/push")) {
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", "Bearer " + tokenStr);
-
-    String safeMsg = message;
-    safeMsg.replace("\\", "\\\\");
-    safeMsg.replace("\"", "\\\"");
-    safeMsg.replace("\n", "\\n");
-    safeMsg.replace("\r", "\\r");
-    String body = "{\"to\":\"" + groupIdStr + "\","
-                  "\"messages\":[{\"type\":\"text\",\"text\":\"" + safeMsg + "\"}]}";
-
-    Serial.print("LINE API Token Len: "); Serial.println(tokenStr.length());
-    Serial.print("LINE API Group ID:  "); Serial.println(groupIdStr);
-    Serial.print("LINE API Payload:   "); Serial.println(body);
-
-    int httpCode = http.POST(body);
-    if (httpCode == 200) {
-      Serial.println("LINE API: Message sent successfully.");
-    } else {
-      Serial.print("LINE API: Failed, code "); Serial.println(httpCode);
-    }
-    http.end();
-  } else {
-    Serial.println("LINE API: Failed to connect.");
-  }
-}
-
-void checkLineAlerts(float temp, float humid) {
-  // ปิดใช้งาน - ย้ายไป GAS แล้ว
-  return;
-  
-  if (lineToken[0] == '\0' || lineGroupId[0] == '\0') return;
-
-  float minT = atof(minTempAlert);
-  float maxT = atof(maxTempAlert);
-  float minH = atof(minHumidAlert);
-  float maxH = atof(maxHumidAlert);
-  unsigned long currentMillis = millis();
-  
-  String boardID = getBoardIdentifier();
-
-  // 1. ตรวจสอบอุณหภูมิ
-  float hysteresisT = 0.5;
-  AlertState newState = STATE_NORMAL;
-  if (temp <= minT && temp > -50) {
-    newState = STATE_ALERT_LOW;
-  } else if (temp >= maxT) {
-    newState = STATE_ALERT_HIGH;
-  } else {
-    if (lastAlertState == STATE_ALERT_LOW && temp < minT + hysteresisT) {
-      newState = STATE_ALERT_LOW;
-    } else if (lastAlertState == STATE_ALERT_HIGH && temp > maxT - hysteresisT) {
-      newState = STATE_ALERT_HIGH;
-    } else {
-      newState = STATE_NORMAL;
-    }
-  }
-
-  if (newState != lastAlertState || 
-      (newState != STATE_NORMAL && (currentMillis - lastLineNotifyTime >= 1800000))) {
-    
-    String message = "";
-    if (newState == STATE_ALERT_LOW) {
-      message = "⚠️ แจ้งเตือน: อุณหภูมิต่ำกว่าค่าตั้ง\n"
-               "🌡️ อุณหภูมิปัจจุบัน: " + String(temp, 1) + " °C\n"
-               "📉 ค่าต่ำสุด: " + String(minT, 1) + " °C\n"
-               "📟 บอร์ด: " + boardID;
-    } else if (newState == STATE_ALERT_HIGH) {
-      message = "⚠️ แจ้งเตือน: อุณหภูมิสูงกว่าค่าตั้ง\n"
-               "🌡️ อุณหภูมิปัจจุบัน: " + String(temp, 1) + " °C\n"
-               "📈 ค่าสูงสุด: " + String(maxT, 1) + " °C\n"
-               "📟 บอร์ด: " + boardID;
-    } else if (newState == STATE_NORMAL && lastAlertState != STATE_NORMAL) {
-      message = "✅ อุณหภูมิกลับมาปกติแล้ว\n"
-               "🌡️ อุณหภูมิปัจจุบัน: " + String(temp, 1) + " °C\n"
-               "📋 ช่วงปกติ: " + String(minT, 1) + " - " + String(maxT, 1) + " °C\n"
-               "📟 บอร์ด: " + boardID;
-    }
-
-    if (message != "") {
-      Serial.print("LINE Temp Alert triggering. State change from ");
-      Serial.print(lastAlertState); Serial.print(" to "); Serial.println(newState);
-      sendLineNotify(message);
-      lastLineNotifyTime = currentMillis;
-    }
-    lastAlertState = newState;
-  }
-
-  // 2. ตรวจสอบความชื้น
-  float hysteresisH = 2.0;
-  AlertState newHumidState = STATE_NORMAL;
-  if (humid <= minH && humid >= 0) {
-    newHumidState = STATE_ALERT_LOW;
-  } else if (humid >= maxH) {
-    newHumidState = STATE_ALERT_HIGH;
-  } else {
-    if (lastHumidAlertState == STATE_ALERT_LOW && humid < minH + hysteresisH) {
-      newHumidState = STATE_ALERT_LOW;
-    } else if (lastHumidAlertState == STATE_ALERT_HIGH && humid > maxH - hysteresisH) {
-      newHumidState = STATE_ALERT_HIGH;
-    } else {
-      newHumidState = STATE_NORMAL;
-    }
-  }
-
-  if (newHumidState != lastHumidAlertState || 
-      (newHumidState != STATE_NORMAL && (currentMillis - lastHumidLineNotifyTime >= 1800000))) {
-    
-    String message = "";
-    if (newHumidState == STATE_ALERT_LOW) {
-      message = "⚠️ แจ้งเตือน: ความชื้นต่ำกว่าค่าตั้ง\n"
-               "💧 ความชื้นปัจจุบัน: " + String(humid, 1) + " %\n"
-               "📉 ค่าต่ำสุด: " + String(minH, 1) + " %\n"
-               "📟 บอร์ด: " + boardID;
-    } else if (newHumidState == STATE_ALERT_HIGH) {
-      message = "⚠️ แจ้งเตือน: ความชื้นสูงกว่าค่าตั้ง\n"
-               "💧 ความชื้นปัจจุบัน: " + String(humid, 1) + " %\n"
-               "📈 ค่าสูงสุด: " + String(maxH, 1) + " %\n"
-               "📟 บอร์ด: " + boardID;
-    } else if (newHumidState == STATE_NORMAL && lastHumidAlertState != STATE_NORMAL) {
-      message = "✅ ความชื้นกลับมาปกติแล้ว\n"
-               "💧 ความชื้นปัจจุบัน: " + String(humid, 1) + " %\n"
-               "📋 ช่วงปกติ: " + String(minH, 1) + " - " + String(maxH, 1) + " %\n"
-               "📟 บอร์ด: " + boardID;
-    }
-
-    if (message != "") {
-      Serial.print("LINE Humid Alert triggering. State change from ");
-      Serial.print(lastHumidAlertState); Serial.print(" to "); Serial.println(newHumidState);
-      sendLineNotify(message);
-      lastHumidLineNotifyTime = currentMillis;
-    }
-    lastHumidAlertState = newHumidState;
-  }
-}
-
-// ฟังก์ชันคอยตรวจเช็คและต่อ WiFi ใหม่แบบอัตโนมัติ (ไม่บล็อกลูป)
 void checkWiFiConnection() {
   static unsigned long lastWiFiCheck = 0;
   unsigned long currentMillis = millis();
@@ -1514,12 +1316,7 @@ void loop() {
     }
     
     updateDisplay(currentTemp, currentHumid, currentStatus);
-    
-    // ตรวจสอบสถานะและแจ้งเตือน Line Notify (ย้ายไป GAS แล้ว - ปิดใช้งาน)
-    // if (currentTemp > -50 && currentTemp != -999) {
-    //   checkLineAlerts(currentTemp, currentHumid);
-    // }
-    
+
     lastUpdate = currentMillis;
   }
 
