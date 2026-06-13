@@ -156,7 +156,8 @@ var DEFAULT_BITMAP = "tree";
 // ============================================================
 // ตั้งค่าเพิ่มเติมสำหรับ Time‑Driven Triggers
 // ============================================================
-var TARGET_SPREADSHEET_ID = "1NhFXVRptyI7KzQdNJ8vsZ8N_8SBeDGiYam3A3OY-IP4";
+// (เดิม hardcode TARGET_SPREADSHEET_ID ไว้ ทำให้ทุกบอร์ดอ่านชีตเดียวกัน — ลบออก
+//  getTargetSheet() ใช้ชีตที่ผูกกับ project แทน เพื่อให้ Code.gs ตัวเดียว deploy ถูกทุกบอร์ด)
 var TEMP_COLUMN = 3;
 var TEMP_IDX = TEMP_COLUMN - 1;
 var THRESHOLD = 30;
@@ -651,7 +652,7 @@ function getSheet() {
 }
 
 function getTargetSheet() {
-  return SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheets()[0];
+  return SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
 }
 
 function getConfig() {
