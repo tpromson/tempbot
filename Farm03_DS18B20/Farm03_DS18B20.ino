@@ -17,7 +17,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.1"
+#define FIRMWARE_VERSION "1.0.2"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DS18B20)
@@ -282,7 +282,7 @@ void updateDisplay(float temp, String status) {
   drawWiFiIcon(115 + shiftX, shiftY);
   
   // เส้นแบ่งแถบด้านบน
-  display.drawFastHLine(0, 10 + shiftX, 128, WHITE);
+  display.drawFastHLine(0, 10 + shiftY, 128, WHITE);
 
   if (temp > -100 && temp < 200) {
     updateDailyMinMax(temp);
@@ -304,7 +304,7 @@ void updateDisplay(float temp, String status) {
     display.setTextSize(1);
     display.setCursor(2 + shiftX, 56 + shiftY);
     
-    int displayState = (millis() / 15000) % 4;
+    int displayState = (millis() / 15000) % 3;
     time_t now = time(nullptr);
     
     if (now < 1000000000) {
@@ -949,22 +949,7 @@ void setup() {
   strncpy(otaBinUrl, custom_ota_bin_url.getValue(), sizeof(otaBinUrl));
   strncpy(tempCalibrationStr, custom_temp_cal.getValue(), sizeof(tempCalibrationStr));
 
-  File configFile = LittleFS.open("/config.bin", "w");
-  if (configFile) {
-    configFile.write((uint8_t*)webAppUrl, sizeof(webAppUrl));
-    configFile.write((uint8_t*)timerDelayStr, sizeof(timerDelayStr));
-    configFile.write((uint8_t*)lineToken, sizeof(lineToken));
-    configFile.write((uint8_t*)minTempAlert, sizeof(minTempAlert));
-    configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
-    configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
-    configFile.write((uint8_t*)boardName, sizeof(boardName));
-    configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
-    configFile.write((uint8_t*)otaVersionUrl, sizeof(otaVersionUrl));
-    configFile.write((uint8_t*)otaBinUrl, sizeof(otaBinUrl));
-    configFile.write((uint8_t*)tempCalibrationStr, sizeof(tempCalibrationStr));
-    configFile.close();
-    Serial.println("Config saved to LittleFS.");
-  }
+  saveConfig();
 
   configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   setBitmap(bitmapName);
