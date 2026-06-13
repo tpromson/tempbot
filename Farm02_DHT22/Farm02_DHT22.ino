@@ -16,7 +16,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.7"
+#define FIRMWARE_VERSION "1.0.8"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DHT22)
@@ -576,7 +576,7 @@ bool readSensorData() {
     failedSyncCount++;
     unsigned long interval = 3600000;
     if (millis() - lastSensorErrorNotifyTime >= interval) {
-      sendLineNotify(String("⚠️ [TempBot Alert]\n") + "Board: " + getBoardIdentifier() + "\nIP: " + WiFi.localIP().toString() + "\nStatus: SENSOR ERROR\nDHT22 not responding!");
+      notifyViaGAS(String("⚠️ [TempBot Alert]\n") + "Board: " + getBoardIdentifier() + "\nIP: " + WiFi.localIP().toString() + "\nStatus: SENSOR ERROR\nDHT22 not responding!");
       lastSensorErrorNotifyTime = millis();
     }
     return false;
@@ -1257,7 +1257,7 @@ void loop() {
                      "Reset Reason: " + resetReason;
                      
     Serial.println("Sending Boot Notification to LINE...");
-    sendLineNotify(message);
+    notifyViaGAS(message);
     isBootNotificationSent = true;
   }
 

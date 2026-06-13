@@ -181,6 +181,15 @@ function doGet(e) {
       return respond(JSON.stringify(thresholds));
     }
 
+    // Board-side LINE notification routed through GAS (board no longer needs
+    // the LINE token/group; GAS holds them in Script Properties)
+    if (e.parameter.notify) {
+      var np = PropertiesService.getScriptProperties();
+      var target = np.getProperty("LINE_TARGET_ID") || np.getProperty("GROUP_ID");
+      if (target) pushToLine(target, { type: "text", text: e.parameter.notify });
+      return respond("OK");
+    }
+
     if (!temperature) return respond("ERROR: Missing temperature");
     if (!boardId || boardId.trim() === "") return respond("ERROR: Missing or empty board_id");
 

@@ -97,6 +97,30 @@ void sendLineNotify(String message) {
   }
 }
 
+// ===== notifyViaGAS =====
+// Route a LINE notification through GAS (?notify=...). GAS pushes it using
+// LINE_TOKEN + LINE_TARGET_ID/GROUP_ID from its Script Properties.
+void notifyViaGAS(String message) {
+  if (strlen(webAppUrl) < 10) return;
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setBufferSizes(4096, 1024);
+  HTTPClient http;
+  String url = String(webAppUrl) + "?notify=" + urlEncode(message)
+             + "&board_id=" + urlEncode(getBoardIdentifier());
+  if (http.begin(client, url)) {
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    http.setTimeout(8000);
+    ESP.wdtDisable();
+    int code = http.GET();
+    ESP.wdtEnable(8000);
+    Serial.print("notifyViaGAS HTTP "); Serial.println(code);
+    http.end();
+  }
+}
+
 // ===== getTempCalibrationOffset =====
 float getTempCalibrationOffset() {
   return atof(tempCalibrationStr);

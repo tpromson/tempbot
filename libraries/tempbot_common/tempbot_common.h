@@ -6,6 +6,7 @@
 
 // ===== Extern Globals =====
 // These must be defined in the main .ino file
+extern char webAppUrl[150];
 extern char lineToken[200];
 extern char lineGroupId[40];
 extern char boardName[32];
@@ -24,6 +25,10 @@ String getBoardIdentifier();
 
 // Send a message via LINE Notify (no-op if token/group not set)
 void sendLineNotify(String message);
+
+// Send a notification THROUGH GAS (GAS holds the LINE token/group in its
+// Script Properties, so the board doesn't need them). no-op if no URL/WiFi.
+void notifyViaGAS(String message);
 
 // Get temperature calibration offset
 float getTempCalibrationOffset();
