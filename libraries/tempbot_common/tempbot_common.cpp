@@ -1,6 +1,12 @@
 #include "tempbot_common.h"
+
+#if defined(ESP8266)
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
+#elif defined(ESP32)
+#include <WiFi.h>
+#include <HTTPClient.h>
+#endif
 #include <WiFiClientSecure.h>
 
 // ===== formatTime =====
@@ -40,7 +46,11 @@ String getBoardIdentifier() {
   String bName = String(boardName);
   bName.trim();
   if (bName.length() == 0) {
+#if defined(ESP8266)
     bName = "BOARD_" + String(ESP.getChipId(), HEX);
+#elif defined(ESP32)
+    bName = "BOARD_" + String((uint32_t)(ESP.getEfuseMac() & 0xFFFFFFFF), HEX);
+#endif
     bName.toUpperCase();
   }
   return bName;

@@ -12,6 +12,8 @@
 #include <time.h>
 #include "bitmaps.h"
 #include <ESP8266WebServer.h>
+#include <tempbot_common.h>
+#include <ArduinoJson.h>
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DS18B20)
@@ -40,17 +42,15 @@ char lineGroupId[40] = "";   // LINE Group ID (เช่น C1234abcd...)
 char minTempAlert[10] = "20.0";
 char maxTempAlert[10] = "35.0";
 char boardName[32] = "";     // Custom Board Name (เช่น Kitchen, ServerRoom)
-char bitmapName[20] = "cat"; // Bitmap set: cat, chicken, fish, tree
-char otaPassword[32] = "";     // ArduinoOTA update password
-char staticIP[16] = "";        // Static IP (empty = DHCP)
+char otaPassword[32] = "";   // ArduinoOTA update password
+char tempCalibrationStr[10] = "0.0"; // Temperature calibration offset
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
 
 enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
-AlertState lastAlertState = STATE_NORMAL; // ไม่ใช้แล้ว - ย้ายไป GAS
-unsigned long lastLineNotifyTime = 0; // ไม่ใช้แล้ว - ย้ายไป GAS
-unsigned long lastSensorErrorNotifyTime = 0;
+AlertState lastAlertState = STATE_NORMAL;
+unsigned long lastLineNotifyTime = 0;
 bool isBootNotificationSent = false;
 
 float dailyMinTemp = 999.0;
@@ -59,20 +59,6 @@ int lastDayOfMinMax = -1;
 unsigned long lastSyncTimeEpoch = 0;
 
 ESP8266WebServer server(80);
-
-String formatTime(time_t epoch, bool includeSeconds) {
-  if (epoch < 1000000000) {
-    return "--:--";
-  }
-  struct tm* timeinfo = localtime(&epoch);
-  char buffer[10];
-  if (includeSeconds) {
-    sprintf(buffer, "%02d:%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-  } else {
-    sprintf(buffer, "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
-  }
-  return String(buffer);
-}
 
 void saveConfig() {
   File configFile = LittleFS.open("/config.bin", "w");
@@ -84,8 +70,6 @@ void saveConfig() {
     configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
     configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
     configFile.write((uint8_t*)boardName, sizeof(boardName));
-    configFile.write((uint8_t*)bitmapName, sizeof(bitmapName));
-    configFile.write((uint8_t*)staticIP, sizeof(staticIP));
     configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
     configFile.close();
   }
@@ -124,15 +108,13 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 <label>Board Name:</label><input name='board' value='%s'><br/>
 <label>Min Temp (C):</label><input name='min_temp' value='%s'><br/>
 <label>Max Temp (C):</label><input name='max_temp' value='%s'><br/>
-<label>OTA Password:</label><input name='ota_pass' value='%s'><br/>
-<label>Static IP:</label><input name='static_ip' value='%s' placeholder='DHCP if empty'><br/>
 <input type='submit' value='Save'>
 </form>
 </body></html>)HTML";
 
 void handleRoot(){
   char buffer[1024];
-  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert, otaPassword, staticIP);
+  snprintf(buffer, sizeof(buffer), CONFIG_HTML, webAppUrl, timerDelayStr, lineToken, boardName, minTempAlert, maxTempAlert);
   server.send(200, "text/html", buffer);
 }
 
@@ -143,8 +125,6 @@ void handleSave(){
   if(server.hasArg("board")) strncpy(boardName, server.arg("board").c_str(), sizeof(boardName)-1);
   if(server.hasArg("min_temp")) strncpy(minTempAlert, server.arg("min_temp").c_str(), sizeof(minTempAlert)-1);
   if(server.hasArg("max_temp")) strncpy(maxTempAlert, server.arg("max_temp").c_str(), sizeof(maxTempAlert)-1);
-  if(server.hasArg("ota_pass")) strncpy(otaPassword, server.arg("ota_pass").c_str(), sizeof(otaPassword)-1);
-  if(server.hasArg("static_ip")) strncpy(staticIP, server.arg("static_ip").c_str(), sizeof(staticIP)-1);
   saveConfig();
   server.send(200, "text/plain", "Config saved, rebooting...");
   delay(500);
@@ -167,16 +147,6 @@ void handleQueue() {
   }
   f.close();
   server.send(200, "text/plain", content);
-}
-
-String getBoardIdentifier() {
-  String bName = String(boardName);
-  bName.trim();
-  if (bName.length() == 0) {
-    bName = "BOARD_" + String(ESP.getChipId(), HEX);
-    bName.toUpperCase();
-  }
-  return bName;
 }
 
 String currentStatus = "STARTING";
@@ -215,11 +185,11 @@ void showOnDisplay(String title, String msg, float temp = -999) {
   display.display();
 }
 
-void playAnimation(int repetitions, String message) {
+void playCatAnimation(int repetitions, String message) {
   for (int i = 0; i < repetitions; i++) {
-    for (int f = 0; f < currentFrameCount; f++) {
+    for (int f = 0; f < FRAME_COUNT; f++) {
       display.clearDisplay();
-      display.drawBitmap(32, 0, currentFrames[f], FRAME_WIDTH, FRAME_HEIGHT, WHITE);
+      display.drawBitmap(32, 0, frames[f], FRAME_WIDTH, FRAME_HEIGHT, WHITE);
       display.setTextSize(1);
       display.setTextColor(WHITE);
       
@@ -488,38 +458,16 @@ void sendData() {
   delay(750); // รอ DS18B20 แปลงค่า 12-bit
 
   float t = sensors.getTempCByIndex(0);
-  Serial.print("DS18B20 reading: ");
-  Serial.println(t, 1);
-  
   if (t == DEVICE_DISCONNECTED_C || t < -55.0 || t > 125.0) {
-    Serial.println("DS18B20 ERROR - Sensor not responding!");
     currentStatus = "SENS ERR";
     failedSyncCount++;
-    
-    // แจ้งเตือน LINE ทุก 30 นาที ถ้า sensor พัง
-    unsigned long sensorErrorInterval = 3600000; // 1 ชั่วโมง (ป้องกันใช้ LINE เกินโควต้า)
-    if (millis() - lastSensorErrorNotifyTime >= sensorErrorInterval) {
-      String boardID = getBoardIdentifier();
-      String ipAddr = WiFi.localIP().toString();
-      String message = String("⚠️ [TempBot Alert]\n")
-                     + "Board: " + boardID + "\n"
-                     + "IP: " + ipAddr + "\n"
-                     + "Status: SENSOR ERROR\n"
-                     + "DS18B20 not responding!\n"
-                     + "Auto reboot after 10 failed attempts";
-      sendLineNotify(message);
-      lastSensorErrorNotifyTime = millis();
-    }
-    
     if (failedSyncCount >= 10) {
-      playAnimation(2, "WATCHDOG REBOOT");
+      playCatAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
     return;
   }
   currentTemp = t;
-  Serial.print("DS18B20 OK: ");
-  Serial.println(t, 1);
 
   // WiFi ไม่ต่อ → เก็บข้อมูลใน Offline Queue
   if (WiFi.status() != WL_CONNECTED) {
@@ -528,7 +476,7 @@ void sendData() {
     currentStatus = "BUFFERED:" + String(qs);
     failedSyncCount++;
     if (failedSyncCount >= 10) {
-      playAnimation(2, "WATCHDOG REBOOT");
+      playCatAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
     return;
@@ -555,54 +503,31 @@ void sendData() {
       syncSuccess = true;
       lastSyncTimeEpoch = time(nullptr);
       
-      // ดึง threshold และ bitmap จาก GAS
+      // ดึง threshold จาก GAS
       String settingsUrl = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(boardID);
       if (http.begin(client, settingsUrl)) {
         int settingsCode = http.GET();
         if (settingsCode == 200) {
           String payload = http.getString();
-          
-          // Parse maxTemp
-          int maxPos = payload.indexOf("\"maxTemp\":");
-          if (maxPos != -1) {
-            int endPos = payload.indexOf(",", maxPos);
-            if (endPos == -1) endPos = payload.indexOf("}", maxPos);
-            String maxStr = payload.substring(maxPos + 9, endPos);
-            maxStr.trim();
-            if (maxStr.length() > 0) {
-              maxStr.toCharArray(maxTempAlert, 10);
-              saveConfig();
+          JsonDocument doc;
+          DeserializationError err = deserializeJson(doc, payload);
+          if (!err) {
+            bool settingsChanged = false;
+            if (!doc["maxTemp"].isNull()) {
+              String maxStr = String((float)doc["maxTemp"], 1);
+              maxStr.toCharArray(maxTempAlert, sizeof(maxTempAlert));
+              settingsChanged = true;
             }
-          }
-          
-          // Parse minTemp
-          int minPos = payload.indexOf("\"minTemp\":");
-          if (minPos != -1) {
-            int endPos = payload.indexOf(",", minPos);
-            if (endPos == -1) endPos = payload.indexOf("}", minPos);
-            String minStr = payload.substring(minPos + 9, endPos);
-            minStr.trim();
-            if (minStr.length() > 0) {
-              minStr.toCharArray(minTempAlert, 10);
+            if (!doc["minTemp"].isNull()) {
+              String minStr = String((float)doc["minTemp"], 1);
+              minStr.toCharArray(minTempAlert, sizeof(minTempAlert));
+              settingsChanged = true;
             }
+            if (settingsChanged) saveConfig();
+            Serial.println("Settings updated from GAS");
+          } else {
+            Serial.print("JSON parse error: "); Serial.println(err.c_str());
           }
-          
-          // Parse bitmap
-          int bmpPos = payload.indexOf("\"bitmap\":");
-          if (bmpPos != -1) {
-            int endPos = payload.indexOf(",", bmpPos);
-            if (endPos == -1) endPos = payload.indexOf("}", bmpPos);
-            String bmpStr = payload.substring(bmpPos + 9, endPos);
-            bmpStr.trim();
-            bmpStr.replace("\"", "");
-            if (bmpStr.length() > 0 && bmpStr.length() < 20) {
-              bmpStr.toCharArray(bitmapName, 20);
-              setBitmap(bitmapName);
-              saveConfig();
-            }
-          }
-          
-          Serial.println("Settings updated from GAS");
         }
         http.end();
       }
@@ -618,7 +543,7 @@ void sendData() {
     failedSyncCount++;
     Serial.print("Watchdog: Failed sync count = "); Serial.println(failedSyncCount);
     if (failedSyncCount >= 10) {
-      playAnimation(2, "WATCHDOG REBOOT");
+      playCatAnimation(2, "WATCHDOG REBOOT");
       delay(1000); ESP.restart();
     }
   } else {
@@ -628,67 +553,7 @@ void sendData() {
 }
 
 
-String urlEncode(String str) {
-  String encoded = "";
-  char buf[4];
-  for (unsigned int i = 0; i < str.length(); i++) {
-    char c = str.charAt(i);
-    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-        c == '-' || c == '_' || c == '.' || c == '~') {
-      encoded += c;
-    } else {
-      sprintf(buf, "%%%02X", (unsigned char)c);
-      encoded += buf;
-    }
-  }
-  return encoded;
-}
-
-void sendLineNotify(String message) {
-  String tokenStr = String(lineToken);
-  tokenStr.trim();
-  String groupIdStr = String(lineGroupId);
-  groupIdStr.trim();
-
-  if (tokenStr.length() == 0 || groupIdStr.length() == 0) return;
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-
-  if (http.begin(client, "https://api.line.me/v2/bot/message/push")) {
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", "Bearer " + tokenStr);
-
-    // สร้าง JSON body (escape " และ \ ในข้อความ)
-    String safeMsg = message;
-    safeMsg.replace("\\", "\\\\");
-    safeMsg.replace("\"", "\\\"");
-    safeMsg.replace("\n", "\\n");
-    safeMsg.replace("\r", "\\r");
-    String body = "{\"to\":\"" + groupIdStr + "\","
-                  "\"messages\":[{\"type\":\"text\",\"text\":\"" + safeMsg + "\"}]}";
-
-    Serial.print("LINE API Token Len: "); Serial.println(tokenStr.length());
-    Serial.print("LINE API Group ID:  "); Serial.println(groupIdStr);
-    Serial.print("LINE API Payload:   "); Serial.println(body);
-
-    int httpCode = http.POST(body);
-    if (httpCode == 200) {
-      Serial.println("LINE API: Message sent successfully.");
-    } else {
-      Serial.print("LINE API: Failed, code "); Serial.println(httpCode);
-    }
-    http.end();
-  } else {
-    Serial.println("LINE API: Failed to connect.");
-  }
-}
-
 void checkLineAlerts(float temp) {
-  // ปิดใช้งาน - ย้ายไป GAS แล้ว
-  return;
-  
   if (lineToken[0] == '\0' || lineGroupId[0] == '\0') return;
 
   float minT = atof(minTempAlert);
@@ -768,7 +633,7 @@ void checkWiFiConnection() {
 void openConfigPortal() {
   currentStatus = "CONFIG MODE";
   updateDisplay(currentTemp, currentStatus);
-  playAnimation(1, "CONFIG MODE");
+  playCatAnimation(1, "CONFIG MODE");
 
   WiFiManager wm;
 
@@ -781,7 +646,6 @@ void openConfigPortal() {
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
   WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
-  WiFiManagerParameter custom_static_ip("static_ip", "Static IP (e.g. 192.168.0.150)", staticIP, 16);
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -791,7 +655,6 @@ void openConfigPortal() {
   wm.addParameter(&custom_max_temp);
   wm.addParameter(&custom_board_name);
   wm.addParameter(&custom_ota_password);
-  wm.addParameter(&custom_static_ip);
 
   wm.setConfigPortalTimeout(120); // ปิด portal อัตโนมัติใน 2 นาที
 
@@ -833,7 +696,7 @@ void openConfigPortal() {
     Serial.println("Config saved after portal.");
   }
 
-  playAnimation(1, "RESTARTING...");
+  playCatAnimation(1, "RESTARTING...");
   delay(500);
   ESP.restart();
 }
@@ -857,24 +720,21 @@ void setup() {
         size_t fileSize = configFile.size();
         configFile.readBytes(webAppUrl, sizeof(webAppUrl));
         configFile.readBytes(timerDelayStr, sizeof(timerDelayStr));
-        if (fileSize >= 504) {
-          // รูปแบบใหม่ล่าสุด: มี staticIP
+        if (fileSize >= 484) {
+          // รูปแบบใหม่ล่าสุด: มี otaPassword
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           configFile.readBytes(lineGroupId, sizeof(lineGroupId));
           configFile.readBytes(boardName, sizeof(boardName));
-          configFile.readBytes(bitmapName, sizeof(bitmapName));
-          configFile.readBytes(staticIP, sizeof(staticIP));
           configFile.readBytes(otaPassword, sizeof(otaPassword));
-        } else if (fileSize >= 484) {
+        } else if (fileSize >= 452) {
           // รูปแบบที่มี boardName แต่ไม่มี otaPassword
           configFile.readBytes(lineToken, sizeof(lineToken));
           configFile.readBytes(minTempAlert, sizeof(minTempAlert));
           configFile.readBytes(maxTempAlert, sizeof(maxTempAlert));
           configFile.readBytes(lineGroupId, sizeof(lineGroupId));
           configFile.readBytes(boardName, sizeof(boardName));
-          bitmapName[0] = '\0';
           otaPassword[0] = '\0';
         } else if (fileSize >= 420) {
           // รูปแบบใหม่: lineToken 200 bytes + lineGroupId 40 bytes
@@ -953,7 +813,7 @@ void setup() {
   
   // display.dim(true); // เปิดโหมดประหยัดหน้าจอ (Dim Screen) ยืดอายุหน้าจอ OLED (บางบอร์ดโคลนอาจจะจอดับเมื่อเปิดใช้บรรทัดนี้ ให้ปิดไว้เป็นค่าเริ่มต้น)
   display.clearDisplay();
-  playAnimation(1, "BOOTING...");
+  playCatAnimation(1, "BOOTING...");
 
   WiFiManager wm;
 
@@ -966,7 +826,6 @@ void setup() {
   WiFiManagerParameter custom_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
   WiFiManagerParameter custom_board_name("board_name", "Board Name (e.g. Kitchen)", boardName, 32);
   WiFiManagerParameter custom_ota_password("ota_pass", "ArduinoOTA Password", otaPassword, 32);
-  WiFiManagerParameter custom_static_ip("static_ip", "Static IP (e.g. 192.168.0.150)", staticIP, 16);
   
   wm.addParameter(&custom_url);
   wm.addParameter(&custom_delay);
@@ -976,23 +835,10 @@ void setup() {
   wm.addParameter(&custom_max_temp);
   wm.addParameter(&custom_board_name);
   wm.addParameter(&custom_ota_password);
-  wm.addParameter(&custom_static_ip);
   
   // ตั้งค่า Config ของ WiFiManager ให้เหมาะกับการจัดการตอนไฟตก
   wm.setConfigPortalTimeout(120); // ถ้าผ่านไป 2 นาทีไม่มีคนมาต่อ AP เพื่อตั้งค่า ให้หลุดจาก setup ไปทำ loop ต่อ (สำคัญมากตอนไฟดับแล้วเราไม่อยู่บ้าน)
   wm.setConnectTimeout(15);       // พยายามต่อกับเร้าเตอร์เดิมตัวละ 15 วินาที
-  
-  // ถ้ามี staticIP ที่ตั้งไว้ ตั้งค่า Static IP ก่อน connect
-  if (strlen(staticIP) > 0) {
-    IPAddress ip, gateway, subnet;
-    if (ip.fromString(staticIP)) {
-      gateway.fromString("192.168.0.1");
-      subnet.fromString("255.255.255.0");
-      wm.setSTAStaticIPConfig(ip, gateway, subnet);
-      Serial.print("Static IP configured: ");
-      Serial.println(staticIP);
-    }
-  }
   
   String boardID = "ESP8266_" + String(ESP.getChipId(), HEX);
   boardID.toUpperCase();
@@ -1004,7 +850,7 @@ void setup() {
     Serial.println("Failed to connect or hit timeout. Continuing to loop...");
     currentStatus = "WIFI TIMEOUT";
   } else {
-    playAnimation(1, "WIFI OK!");
+    playCatAnimation(1, "WIFI OK!");
     currentStatus = "CONNECTED";
   }
 
@@ -1060,10 +906,6 @@ void setup() {
   }
 
   configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
-  
-  // โหลด bitmap จาก config
-  setBitmap(bitmapName);
-  
   ArduinoOTA.setHostname(boardID.c_str());
   if (otaPassword[0] != '\0') {
     ArduinoOTA.setPassword(otaPassword);
@@ -1072,11 +914,7 @@ void setup() {
     Serial.println("ArduinoOTA: Unprotected.");
   }
   ArduinoOTA.begin();
-  Serial.print("OTA ready! IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.print("OTA port: 8266, Hostname: ");
-  Serial.println(boardID.c_str());
-  
+
   if (WiFi.status() == WL_CONNECTED) {
     sendData();
   }
@@ -1115,7 +953,7 @@ void loop() {
     if (holdTime >= 5000 && !flashActionTaken) {
       // ค้างครบ 5 วินาที → Factory Reset
       flashActionTaken = true;
-      playAnimation(2, "FACTORY RESET");
+      playCatAnimation(2, "FACTORY RESET");
       WiFiManager wm;
       wm.resetSettings();
       if (LittleFS.begin()) {
@@ -1196,9 +1034,9 @@ void loop() {
 
   // 1. จัดการส่งข้อมูลไป Google Sheets (ทุก 30 นาที)
   if (currentMillis - lastTime >= timerDelay) {
-    playAnimation(1, "SENDING DATA"); 
+    playCatAnimation(1, "SENDING DATA"); 
     sendData();
-    playAnimation(1, "DONE!");
+    playCatAnimation(1, "DONE!");
     lastTime = currentMillis; // รีเซ็ตตัวจับเวลา เพื่อรออีก 30 นาทีรอบถัดไป
   }
 
@@ -1228,25 +1066,19 @@ void loop() {
       isConversionRequestIssued = true;
     } else if (currentMillis - conversionStartTime >= 750) {
       // เมื่อเวลาผ่านไปเกิน 750ms นับจากสั่งคำนวณ ให้ดึงค่ามาแสดงผล
-      float tempRead = sensors.getTempCByIndex(0);
-      Serial.print("Loop DS18B20 reading: ");
-      Serial.println(tempRead, 1);
+      currentTemp = sensors.getTempCByIndex(0);
       
-      if (tempRead != DEVICE_DISCONNECTED_C && tempRead >= -55.0 && tempRead <= 125.0) {
-        currentTemp = tempRead;
-        if (WiFi.status() == WL_CONNECTED && (currentStatus == "RECONNECTING" || currentStatus == "SENS ERR")) {
-          currentStatus = "CONNECTED";
-        }
-      } else {
-        Serial.println("Loop DS18B20 ERROR - keeping previous value");
+      // ถ้าเชื่อมต่อ WiFi ได้ปกติ แต่อยู่ในช่วงพักรอส่งข้อมูล ให้คงสถานะ SYNCED หรือ CONNECTED ไว้
+      if (WiFi.status() == WL_CONNECTED && (currentStatus == "RECONNECTING" || currentStatus == "SENS ERR")) {
+        currentStatus = "CONNECTED";
       }
       
       updateDisplay(currentTemp, currentStatus);
       
-      // ตรวจสอบสถานะและแจ้งเตือน Line Notify (ย้ายไป GAS แล้ว - ปิดใช้งาน)
-      // if (currentTemp != DEVICE_DISCONNECTED_C && currentTemp > -50) {
-      //   checkLineAlerts(currentTemp);
-      // }
+      // ตรวจสอบสถานะและแจ้งเตือน Line Notify
+      if (currentTemp != DEVICE_DISCONNECTED_C && currentTemp > -50) {
+        checkLineAlerts(currentTemp);
+      }
       
       isConversionRequestIssued = false; // รีเซ็ตสถานะเพื่อรอรอบถัดไป
       lastUpdate = currentMillis;

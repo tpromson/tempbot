@@ -11,6 +11,8 @@
 #include <ArduinoOTA.h>
 #include <time.h>
 #include "bitmaps.h"
+#include <tempbot_common.h>
+#include <ArduinoJson.h>
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DS18B20)
@@ -40,6 +42,7 @@ char minTempAlert[10] = "20.0";
 char maxTempAlert[10] = "35.0";
 char boardName[32] = "";     // Custom Board Name (เช่น Kitchen, ServerRoom)
 char otaPassword[32] = "";   // ArduinoOTA update password
+char tempCalibrationStr[10] = "0.0"; // Temperature calibration offset
 unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
@@ -53,20 +56,6 @@ float dailyMinTemp = 999.0;
 float dailyMaxTemp = -999.0;
 int lastDayOfMinMax = -1;
 unsigned long lastSyncTimeEpoch = 0;
-
-String formatTime(time_t epoch, bool includeSeconds) {
-  if (epoch < 1000000000) {
-    return "--:--";
-  }
-  struct tm* timeinfo = localtime(&epoch);
-  char buffer[10];
-  if (includeSeconds) {
-    sprintf(buffer, "%02d:%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-  } else {
-    sprintf(buffer, "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
-  }
-  return String(buffer);
-}
 
 void updateDailyMinMax(float temp) {
   time_t now = time(nullptr);
@@ -89,16 +78,6 @@ void updateDailyMinMax(float temp) {
   }
 }
 
-
-String getBoardIdentifier() {
-  String bName = String(boardName);
-  bName.trim();
-  if (bName.length() == 0) {
-    bName = "BOARD_" + String(ESP.getChipId(), HEX);
-    bName.toUpperCase();
-  }
-  return bName;
-}
 
 String currentStatus = "STARTING";
 float currentTemp = -999;
@@ -459,27 +438,25 @@ void sendData() {
         int settingsCode = http.GET();
         if (settingsCode == 200) {
           String payload = http.getString();
-          int maxPos = payload.indexOf("\"maxTemp\":");
-          int minPos = payload.indexOf("\"minTemp\":");
-          if (maxPos != -1) {
-            int endPos = payload.indexOf(",", maxPos);
-            if (endPos == -1) endPos = payload.indexOf("}", maxPos);
-            String maxStr = payload.substring(maxPos + 9, endPos);
-            maxStr.trim();
-            if (maxStr.length() > 0) {
-              maxStr.toCharArray(maxTempAlert, 10);
-              saveConfig();
+          JsonDocument doc;
+          DeserializationError err = deserializeJson(doc, payload);
+          if (!err) {
+            bool settingsChanged = false;
+            if (!doc["maxTemp"].isNull()) {
+              String maxStr = String((float)doc["maxTemp"], 1);
+              maxStr.toCharArray(maxTempAlert, sizeof(maxTempAlert));
+              settingsChanged = true;
             }
-          }
-          if (minPos != -1) {
-            int endPos = payload.indexOf("}", minPos);
-            String minStr = payload.substring(minPos + 9, endPos);
-            minStr.trim();
-            if (minStr.length() > 0) {
-              minStr.toCharArray(minTempAlert, 10);
+            if (!doc["minTemp"].isNull()) {
+              String minStr = String((float)doc["minTemp"], 1);
+              minStr.toCharArray(minTempAlert, sizeof(minTempAlert));
+              settingsChanged = true;
             }
+            if (settingsChanged) saveConfig();
+            Serial.println("Settings updated from GAS");
+          } else {
+            Serial.print("JSON parse error: "); Serial.println(err.c_str());
           }
-          Serial.println("Settings updated from GAS");
         }
         http.end();
       }
@@ -504,63 +481,6 @@ void sendData() {
   }
 }
 
-
-String urlEncode(String str) {
-  String encoded = "";
-  char buf[4];
-  for (unsigned int i = 0; i < str.length(); i++) {
-    char c = str.charAt(i);
-    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-        c == '-' || c == '_' || c == '.' || c == '~') {
-      encoded += c;
-    } else {
-      sprintf(buf, "%%%02X", (unsigned char)c);
-      encoded += buf;
-    }
-  }
-  return encoded;
-}
-
-void sendLineNotify(String message) {
-  String tokenStr = String(lineToken);
-  tokenStr.trim();
-  String groupIdStr = String(lineGroupId);
-  groupIdStr.trim();
-
-  if (tokenStr.length() == 0 || groupIdStr.length() == 0) return;
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-
-  if (http.begin(client, "https://api.line.me/v2/bot/message/push")) {
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", "Bearer " + tokenStr);
-
-    // สร้าง JSON body (escape " และ \ ในข้อความ)
-    String safeMsg = message;
-    safeMsg.replace("\\", "\\\\");
-    safeMsg.replace("\"", "\\\"");
-    safeMsg.replace("\n", "\\n");
-    safeMsg.replace("\r", "\\r");
-    String body = "{\"to\":\"" + groupIdStr + "\","
-                  "\"messages\":[{\"type\":\"text\",\"text\":\"" + safeMsg + "\"}]}";
-
-    Serial.print("LINE API Token Len: "); Serial.println(tokenStr.length());
-    Serial.print("LINE API Group ID:  "); Serial.println(groupIdStr);
-    Serial.print("LINE API Payload:   "); Serial.println(body);
-
-    int httpCode = http.POST(body);
-    if (httpCode == 200) {
-      Serial.println("LINE API: Message sent successfully.");
-    } else {
-      Serial.print("LINE API: Failed, code "); Serial.println(httpCode);
-    }
-    http.end();
-  } else {
-    Serial.println("LINE API: Failed to connect.");
-  }
-}
 
 void checkLineAlerts(float temp) {
   if (lineToken[0] == '\0' || lineGroupId[0] == '\0') return;
