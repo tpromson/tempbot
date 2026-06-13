@@ -16,7 +16,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.2"
+#define FIRMWARE_VERSION "1.0.3"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DHT22)
@@ -1000,6 +1000,8 @@ void setup() {
   display.setCursor(0, 0);
   display.println("IP Address:");
   display.println(WiFi.localIP());
+  display.print("FW v");
+  display.println(FIRMWARE_VERSION);
   display.display();
   delay(3000);
   display.clearDisplay();
