@@ -47,9 +47,6 @@ unsigned long lastTime = 0;
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
 
-enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
-AlertState lastAlertState = STATE_NORMAL;
-unsigned long lastLineNotifyTime = 0;
 bool isBootNotificationSent = false;
 
 float dailyMinTemp = 999.0;
@@ -498,64 +495,6 @@ void sendData() {
   }
 }
 
-
-void checkLineAlerts(float temp) {
-  if (lineToken[0] == '\0' || lineGroupId[0] == '\0') return;
-
-  float minT = atof(minTempAlert);
-  float maxT = atof(maxTempAlert);
-  unsigned long currentMillis = millis();
-  
-  String boardID = getBoardIdentifier();
-
-  float hysteresisT = 0.5;
-  AlertState newState = STATE_NORMAL;
-  if (temp <= minT && temp > -50) {
-    newState = STATE_ALERT_LOW;
-  } else if (temp >= maxT) {
-    newState = STATE_ALERT_HIGH;
-  } else {
-    if (lastAlertState == STATE_ALERT_LOW && temp < minT + hysteresisT) {
-      newState = STATE_ALERT_LOW;
-    } else if (lastAlertState == STATE_ALERT_HIGH && temp > maxT - hysteresisT) {
-      newState = STATE_ALERT_HIGH;
-    } else {
-      newState = STATE_NORMAL;
-    }
-  }
-
-  // ส่งแจ้งเตือนเมื่อเกิดการเปลี่ยนสถานะ หรือถ้ายืนระยะอยู่ในสถานะแจ้งเตือนเดิมเกิน 30 นาที ให้ส่งซ้ำ
-  if (newState != lastAlertState || 
-      (newState != STATE_NORMAL && (currentMillis - lastLineNotifyTime >= 1800000))) {
-    
-    String message = "";
-    if (newState == STATE_ALERT_LOW) {
-      message = "⚠️ แจ้งเตือน: อุณหภูมิต่ำกว่าค่าตั้ง\n"
-               "🌡️ อุณหภูมิปัจจุบัน: " + String(temp, 1) + " °C\n"
-               "📉 ค่าต่ำสุด: " + String(minT, 1) + " °C\n"
-               "📟 บอร์ด: " + boardID;
-    } else if (newState == STATE_ALERT_HIGH) {
-      message = "⚠️ แจ้งเตือน: อุณหภูมิสูงกว่าค่าตั้ง\n"
-               "🌡️ อุณหภูมิปัจจุบัน: " + String(temp, 1) + " °C\n"
-               "📈 ค่าสูงสุด: " + String(maxT, 1) + " °C\n"
-               "📟 บอร์ด: " + boardID;
-    } else if (newState == STATE_NORMAL && lastAlertState != STATE_NORMAL) {
-      message = "✅ อุณหภูมิกลับมาปกติแล้ว\n"
-               "🌡️ อุณหภูมิปัจจุบัน: " + String(temp, 1) + " °C\n"
-               "📋 ช่วงปกติ: " + String(minT, 1) + " - " + String(maxT, 1) + " °C\n"
-               "📟 บอร์ด: " + boardID;
-    }
-
-    if (message != "") {
-      Serial.print("LINE Alert triggering. State change from ");
-      Serial.print(lastAlertState); Serial.print(" to "); Serial.println(newState);
-      sendLineNotify(message);
-      lastLineNotifyTime = currentMillis;
-    }
-    lastAlertState = newState;
-  }
-}
-
 // ฟังก์ชันคอยตรวจเช็คและต่อ WiFi ใหม่แบบอัตโนมัติ (ไม่บล็อกลูป)
 void checkWiFiConnection() {
   static unsigned long lastWiFiCheck = 0;
@@ -995,11 +934,6 @@ void loop() {
       }
       
       updateDisplay(currentTemp, currentStatus);
-      
-      // ตรวจสอบสถานะและแจ้งเตือน Line Notify
-      if (currentTemp != DEVICE_DISCONNECTED_C && currentTemp > -50) {
-        checkLineAlerts(currentTemp);
-      }
       
       isConversionRequestIssued = false; // รีเซ็ตสถานะเพื่อรอรอบถัดไป
       lastUpdate = currentMillis;
