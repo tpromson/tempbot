@@ -16,7 +16,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.8"
+#define FIRMWARE_VERSION "1.0.10"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DHT22)
@@ -32,7 +32,8 @@
 
 // Offline Data Queue
 #define QUEUE_FILE        "/queue.csv"
-#define MAX_QUEUE_ENTRIES 96
+#define DROPPED_FILE      "/dropped.txt"
+#define MAX_QUEUE_ENTRIES 1440
 
 // --- 2. Objects ---
 DHT dht(SENSOR_PIN, DHTTYPE);
@@ -56,6 +57,7 @@ char tempCalibrationStr[10] = "0.0"; // Temperature calibration offset
 
 unsigned long timerDelay = 1800000; // 30 นาที (ค่าเริ่มต้น)
 int failedSyncCount = 0;            // นับจำนวนครั้งที่ส่งข้อมูลไม่สำเร็จติดต่อกัน
+int droppedEntries = 0;             // นับ entries ที่ถูกลบเมื่อ queue เต็ม
 
 enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
 AlertState lastAlertState = STATE_NORMAL;
@@ -75,6 +77,20 @@ int lastDayOfMinMax = -1;
 unsigned long lastSyncTimeEpoch = 0;
 unsigned long lastSyncTimeMillis = 0;
 unsigned long lastTime = 0;
+
+int loadDroppedCount() {
+  if (!LittleFS.exists(DROPPED_FILE)) return 0;
+  File f = LittleFS.open(DROPPED_FILE, "r");
+  if (!f) return 0;
+  int n = f.readStringUntil('\n').toInt();
+  f.close();
+  return n;
+}
+
+void saveDroppedCount(int count) {
+  File f = LittleFS.open(DROPPED_FILE, "w");
+  if (f) { f.println(String(count)); f.close(); }
+}
 
 void saveConfig() {
   File configFile = LittleFS.open("/config.bin", "w");
@@ -405,7 +421,8 @@ int getQueueSize() {
 void queueData(float temp, float humid) {
   int size = getQueueSize();
   if (size >= MAX_QUEUE_ENTRIES) {
-    // Queue full → remove oldest entry to make room for new data
+    droppedEntries++;
+    saveDroppedCount(droppedEntries);
     Serial.println("Queue full! Removing oldest entry...");
     File f = LittleFS.open(QUEUE_FILE, "r");
     if (f) {
@@ -682,6 +699,15 @@ void sendData() {
   client.setBufferSizes(4096, 1024); // จำกัด TLS buffer กัน OOM ตอน handshake ติดกันหลายครั้ง
 
   if (syncToGAS(client)) {
+    if (droppedEntries > 0) {
+      String msg = "⚠️ [TempBot] Data Loss\n"
+                   "Board: " + getBoardIdentifier() + "\n"
+                   "หายระหว่างออฟไลน์: " + String(droppedEntries) + " entries\n"
+                   "(queue เต็ม 1440 entries = ~30 วัน ยังไม่พอ)";
+      notifyViaGAS(msg);
+      droppedEntries = 0;
+      saveDroppedCount(0);
+    }
     fetchAndApplySettings(client);
     flushQueue();
   } else {
@@ -801,6 +827,7 @@ void setup() {
 
   // 1. อ่านค่าพารามิเตอร์จาก LittleFS
   if (LittleFS.begin()) {
+    droppedEntries = loadDroppedCount();
     Serial.println("LittleFS mounted successfully.");
     if (LittleFS.exists("/config.bin")) {
       File configFile = LittleFS.open("/config.bin", "r");
@@ -1094,15 +1121,16 @@ void checkForOTAUpdate() {
     Serial.println("Failed to begin HTTP for OTA version.");
     return;
   }
+  ESP.wdtDisable();
   int httpCode = http.GET();
+  String latestVersion = (httpCode == 200) ? http.getString() : "";
+  ESP.wdtEnable(8000);
+  http.end();
   if (httpCode != 200) {
     Serial.printf("OTA version check failed, HTTP code %d\n", httpCode);
-    http.end();
     return;
   }
-  String latestVersion = http.getString();
   latestVersion.trim();
-  http.end();
 
   Serial.printf("Current: %s, Latest: %s\n", FIRMWARE_VERSION, latestVersion.c_str());
 
@@ -1247,18 +1275,19 @@ void loop() {
 
   // ส่ง Line Boot Notification ครั้งแรกที่เชื่อมต่อสำเร็จ
   if (!isBootNotificationSent && WiFi.status() == WL_CONNECTED) {
-    String boardID = getBoardIdentifier();
     String resetReason = ESP.getResetReason();
-    String ipAddr = WiFi.localIP().toString();
-    
-    String message = "\n🚀 [BOOT] Board Online!\n"
-                     "Name: " + boardID + "\n"
-                     "IP: " + ipAddr + "\n"
-                     "Reset Reason: " + resetReason;
-                     
-    Serial.println("Sending Boot Notification to LINE...");
-    notifyViaGAS(message);
     isBootNotificationSent = true;
+    if (!resetReason.startsWith("Software Watchdog") && !resetReason.startsWith("Exception")) {
+      String boardID = getBoardIdentifier();
+      String message = "\n🚀 [BOOT] Board Online!\n"
+                       "Name: " + boardID + "\n"
+                       "IP: " + WiFi.localIP().toString() + "\n"
+                       "Reset Reason: " + resetReason;
+      Serial.println("Sending Boot Notification to LINE...");
+      notifyViaGAS(message);
+    } else {
+      Serial.println("Boot Notification skipped: " + resetReason);
+    }
   }
 
   unsigned long currentMillis = millis();
