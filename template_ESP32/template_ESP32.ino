@@ -373,6 +373,23 @@ void flushQueue() {
   }
 }
 
+void saveConfig() {
+  File configFile = LittleFS.open("/config.bin", "w");
+  if (configFile) {
+    configFile.write((uint8_t*)webAppUrl, sizeof(webAppUrl));
+    configFile.write((uint8_t*)timerDelayStr, sizeof(timerDelayStr));
+    configFile.write((uint8_t*)lineToken, sizeof(lineToken));
+    configFile.write((uint8_t*)minTempAlert, sizeof(minTempAlert));
+    configFile.write((uint8_t*)maxTempAlert, sizeof(maxTempAlert));
+    configFile.write((uint8_t*)lineGroupId, sizeof(lineGroupId));
+    configFile.write((uint8_t*)boardName, sizeof(boardName));
+    configFile.write((uint8_t*)otaPassword, sizeof(otaPassword));
+    configFile.write((uint8_t*)tempCalibrationStr, sizeof(tempCalibrationStr));
+    configFile.close();
+    Serial.println("Config saved.");
+  }
+}
+
 // --- 6. Logic Functions ---
 
 void sendData() {
@@ -587,7 +604,7 @@ void openConfigPortal() {
 
   wm.setConfigPortalTimeout(120); // ปิด portal อัตโนมัติใน 2 นาที
 
-  String boardID = "ESP8266_" + String(ESP.getChipId(), HEX);
+  String boardID = getBoardIdentifier();
   boardID.toUpperCase();
 
   Serial.println("Opening Config Portal (no WiFi reset)...");
@@ -637,7 +654,9 @@ void setup() {
   pinMode(0, INPUT_PULLUP); // ตั้งค่าขาปุ่ม Flash สำหรับ Factory Reset (GPIO 0)
 
   // สั่งตั้งค่า WiFi Mode ให้เป็นแบบพยายามต่ออัตโนมัติเมื่อหลุด
+  #if defined(ESP8266)
   WiFi.setAutoConnect(true);
+  #endif
   WiFi.setAutoReconnect(true);
 
   // 1. อ่านค่าพารามิเตอร์จาก LittleFS
@@ -769,7 +788,7 @@ void setup() {
   wm.setConfigPortalTimeout(120); // ถ้าผ่านไป 2 นาทีไม่มีคนมาต่อ AP เพื่อตั้งค่า ให้หลุดจาก setup ไปทำ loop ต่อ (สำคัญมากตอนไฟดับแล้วเราไม่อยู่บ้าน)
   wm.setConnectTimeout(15);       // พยายามต่อกับเร้าเตอร์เดิมตัวละ 15 วินาที
   
-  String boardID = "ESP8266_" + String(ESP.getChipId(), HEX);
+  String boardID = getBoardIdentifier();
   boardID.toUpperCase();
   
   currentStatus = "WIFI CONNECTING";
@@ -915,7 +934,11 @@ void loop() {
   // ส่ง Line Boot Notification ครั้งแรกที่เชื่อมต่อสำเร็จ
   if (!isBootNotificationSent && WiFi.status() == WL_CONNECTED) {
     String boardID = getBoardIdentifier();
+    #if defined(ESP8266)
     String resetReason = ESP.getResetReason();
+    #else
+    String resetReason = String(esp_reset_reason());
+    #endif
     String ipAddr = WiFi.localIP().toString();
     
     String message = "\n🚀 [BOOT] Board Online!\n"
