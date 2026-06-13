@@ -1,14 +1,14 @@
 /**
- * TempBot + IoTcenter Integration
+ * TempBot — Google Apps Script
  * ============================================================
- * doGet  → รับข้อมูลจาก ESP8266 → บันทึกลง Sheet + ส่ง IoTcenter
- * doPost → รับ Webhook จาก LINE → ตอบคำถามจาก User
+ * Web App (doGet/doPost)  → รับข้อมูล ESP8266 + LINE Bot
+ * Time‑Driven Triggers    → ตรวจ Sensor, รายงานอัตโนมัติ
  *
  * Script Properties (File → Project Properties):
- *   LINE_TOKEN            = <Channel Access Token>
+ *   LINE_TOKEN            = Channel Access Token
  *   IOTCENTER_API_URL     = https://line-fleetbackend-production.up.railway.app
- *   IOTCENTER_API_KEY     = (จาก IoTcenter Setup → Sources → API Key)
- *   IOTCENTER_DEVICE      = BOARD_A1B2C3 (ชื่อเดียวกับ board_id)
+ *   IOTCENTER_API_KEY     = (จาก IoTcenter)
+ *   IOTCENTER_DEVICE      = ชื่อ device
  */
 
 // ============================================================
@@ -26,7 +26,7 @@ var IoTcenter = (function() {
     _apiUrl = apiUrl;
     _apiKey = apiKey;
     _deviceName = deviceName || '';
-    _deviceType = deviceType || 'iot';
+    _deviceType = deviceType || 'google_apps_script';
   }
 
   function _callApi(path, payload, retries) {
@@ -50,7 +50,9 @@ var IoTcenter = (function() {
       var response = UrlFetchApp.fetch(_apiUrl + path, options);
       var status = response.getResponseCode();
 
-      if (status === 201 || status === 200) return JSON.parse(response.getContentText());
+      if (status === 201 || status === 200) {
+        return JSON.parse(response.getContentText());
+      }
 
       if ((status >= 500 || status === 429) && retries < 2) {
         Utilities.sleep(2000 * (retries + 1));
@@ -61,11 +63,11 @@ var IoTcenter = (function() {
       return null;
     } catch (e) {
       if (retries < 2) {
-        Logger.log('[IoTcenter] Retry ' + (retries + 1) + '/2 after: ' + e.toString());
+        Logger.log('[IoTcenter] Retry ' + (retries + 1) + '/2: ' + e.toString());
         Utilities.sleep(2000 * (retries + 1));
         return _callApi(path, payload, retries + 1);
       }
-      Logger.log('[IoTcenter] Connection error after retries: ' + e.toString());
+      Logger.log('[IoTcenter] Connection error: ' + e.toString());
       return null;
     }
   }
@@ -81,21 +83,22 @@ var IoTcenter = (function() {
   }
 
   function sendHeartbeat(deviceName, deviceType, metadata) {
-    return _callApi('/api/iotcenter/heartbeat', {
+    var data = {
       device_name: deviceName || _deviceName,
-      device_type: deviceType || _deviceType,
-      metadata: metadata || {}
-    });
+      device_type: deviceType || _deviceType
+    };
+    if (metadata) data.metadata = metadata;
+    return _callApi('/api/iotcenter/heartbeat', data);
   }
 
   return { init: init, sendEvent: sendEvent, sendHeartbeat: sendHeartbeat };
 })();
 
 // ============================================================
-// IoTcenter Config — ตั้งค่าใน Script Properties
+// IoTcenter Config
 // ============================================================
 function getIoTcenterConfig() {
-  var props = PropertiesService.getScriptProperties();
+  const props = PropertiesService.getScriptProperties();
   return {
     apiUrl: props.getProperty('IOTCENTER_API_URL') || 'https://line-fleetbackend-production.up.railway.app',
     apiKey: props.getProperty('IOTCENTER_API_KEY') || '',
@@ -106,7 +109,6 @@ function getIoTcenterConfig() {
 function sendToIoTcenter(boardId, eventType, level, message, payload) {
   var cfg = getIoTcenterConfig();
   if (!cfg.apiKey) return;
-
   IoTcenter.init(cfg.apiUrl, cfg.apiKey, boardId, 'iot');
 
   switch (eventType) {
@@ -119,29 +121,7 @@ function sendToIoTcenter(boardId, eventType, level, message, payload) {
 }
 
 // ============================================================
-// iotcenterHeartbeat — cron ทุก 15 นาที
-// ============================================================
-function iotcenterHeartbeat() {
-  var sheet = getSheet();
-  var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return;
-
-  var row = sheet.getRange(lastRow, 1, 1, 5).getValues()[0];
-  var boardId = String(row[1] || '');
-  if (!boardId) return;
-
-  var temp = parseFloat(row[2]);
-  var humid = parseFloat(row[3]) || 0;
-
-  var payload = {};
-  if (!isNaN(temp)) payload.lastTemperature = temp;
-  if (humid > 0) payload.lastHumidity = humid;
-
-  sendToIoTcenter(boardId, 'heartbeat', 'info', 'Sensor active', payload);
-}
-
-// ============================================================
-// CONFIG — ESP8266 TempBot Settings
+// CONFIG
 // ============================================================
 var TIMEZONE   = "Asia/Bangkok";
 var SHEET_NAME = "";
@@ -174,7 +154,17 @@ var DEFAULT_THRESHOLDS = {
 var DEFAULT_BITMAP = "tree";
 
 // ============================================================
-// doGet: รับข้อมูลจาก ESP8266
+// ตั้งค่าเพิ่มเติมสำหรับ Time‑Driven Triggers
+// ============================================================
+var TARGET_SPREADSHEET_ID = "1NhFXVRptyI7KzQdNJ8vsZ8N_8SBeDGiYam3A3OY-IP4";
+var TEMP_COLUMN = 3;
+var TEMP_IDX = TEMP_COLUMN - 1;
+var THRESHOLD = 30;
+var MAX_PLAUSIBLE_TEMP = 35;
+var MIN_PLAUSIBLE_TEMP = -10;
+
+// ============================================================
+// doGet — รับข้อมูลจาก ESP
 // ============================================================
 function doGet(e) {
   try {
@@ -235,7 +225,6 @@ function doGet(e) {
 
     checkAndNotify(cleanBoardId, tempVal, humidVal);
 
-    // ✅ IoTcenter: ส่ง temperature reading
     var iotPayload = { temperature: tempVal };
     if (humidVal > 0) iotPayload.humidity = humidVal;
     sendToIoTcenter(cleanBoardId, 'TEMP_NORMAL', 'info',
@@ -251,7 +240,7 @@ function doGet(e) {
 }
 
 // ============================================================
-// doPost: รับ Webhook จาก LINE
+// doPost — รับ Webhook จาก LINE
 // ============================================================
 function doPost(e) {
   try {
@@ -273,7 +262,7 @@ function doPost(e) {
 }
 
 // ============================================================
-// handleTextMessage: จัดการคำสั่งจาก User
+// handleTextMessage — LINE Bot Commands
 // ============================================================
 function handleTextMessage(event) {
   var replyToken = event.replyToken;
@@ -309,12 +298,12 @@ function handleTextMessage(event) {
         replyToLine(replyToken, "❌ ค่าไม่ถูกต้อง ลองใหม่ เช่น 'ตั้ง max 35'");
       } else if (type === "max") {
         saveThreshold(targetBoard, value, null);
-        replyToLine(replyToken, "✅ ตั้ง MAX " + targetBoard + ": " + getThresholds(targetBoard).maxTemp + " °C");
+        replyToLine(replyToken, "✅ " + targetBoard + " MAX: " + getThresholds(targetBoard).maxTemp + " °C");
       } else if (type === "min") {
         saveThreshold(targetBoard, null, value);
-        replyToLine(replyToken, "✅ ตั้ง MIN " + targetBoard + ": " + getThresholds(targetBoard).minTemp + " °C");
+        replyToLine(replyToken, "✅ " + targetBoard + " MIN: " + getThresholds(targetBoard).minTemp + " °C");
       } else {
-        replyToLine(replyToken, "❌ ไม่รู้จัก ลอง 'ตั้ง max 35' หรือ 'ตั้ง min 20'");
+        replyToLine(replyToken, "❌ ลอง: ตั้ง max 35 หรือ ตั้ง min 20");
       }
     } else {
       replyToLine(replyToken, "❌ ข้อมูลไม่ครบ\nลอง: ตั้ง max 35 หรือ ตั้ง min 20");
@@ -323,9 +312,9 @@ function handleTextMessage(event) {
     var parts = rawText.trim().split(/\s+/);
     var targetBoard = parts.length >= 2 ? parts.slice(1).join(" ") : "DEFAULT";
     var t = getThresholds(targetBoard);
-    replyToLine(replyToken, "📋 ค่าตั้งของ " + targetBoard + "\n─────────────────\n🌡️ MAX: " + t.maxTemp + " °C\n🌡️ MIN: " + t.minTemp + " °C\n─────────────────\nเปลี่ยน: ตั้ง max 35 หรือ ตั้ง min 20");
+    replyToLine(replyToken, "📋 " + targetBoard + "\n─────\n🌡️ MAX: " + t.maxTemp + " °C\n🌡️ MIN: " + t.minTemp + " °C\n─────\nเปลี่ยน: ตั้ง max 35");
   } else if (["help", "ช่วยเหลือ", "คำสั่ง", "?"].indexOf(text) !== -1) {
-    replyToLine(replyToken, "📋 TempBot คำสั่งที่ใช้ได้\n─────────────────\n• temp / อุณหภูมิ / ความชื้น / ล่าสุด → ข้อมูลล่าสุด\n• status / สถานะ / ทั้งหมด → สรุปทุกบอร์ด\n• สรุป / report / กราฟ → รายงาน 24 ชม. + กราฟ\n• ตั้ง max 35 / ตั้ง min 20 → ตั้งค่าแจ้งเตือน\n• ดูค่า → ดูค่าตั้งปัจจุบัน\n• help / ช่วยเหลือ → แสดงคำสั่งนี้");
+    replyToLine(replyToken, "📋 TempBot\n─────\n• temp → ล่าสุด\n• status → สรุปทุกบอร์ด\n• สรุป → รายงาน 24 ชม. + กราฟ\n• ตั้ง max 35 → ค่าแจ้งเตือน\n• ดูค่า → ดูค่าตั้ง\n• help → คำสั่งนี้");
   }
 }
 
@@ -345,10 +334,10 @@ function getLatestEntry() {
   var dataType  = row[4];
 
   var formattedTime = Utilities.formatDate(new Date(timestamp), TIMEZONE, "dd MMM. yy HH:mm") + " น.";
-  var msg = "🌡️ ข้อมูลล่าสุด\n📟 " + boardId + "\n🌡️ อุณหภูมิ: " + temp + " °C\n";
-  if (humid !== "" && humid !== null && humid !== undefined) msg += "💧 ความชื้น: " + humid + " %\n";
+  var msg = "🌡️ ข้อมูลล่าสุด\n📟 " + boardId + "\n🌡️ " + temp + " °C\n";
+  if (humid !== "" && humid !== null && humid !== undefined) msg += "💧 " + humid + " %\n";
   msg += "🕐 " + formattedTime;
-  if (dataType === "BUFFERED") msg += "\n⚠️ (ข้อมูลจาก Offline Buffer)";
+  if (dataType === "BUFFERED") msg += "\n⚠️ (Offline Buffer)";
   return msg;
 }
 
@@ -369,7 +358,7 @@ function getAllBoardStatus() {
 
   if (latestPerBoard.size === 0) return "❌ ไม่พบข้อมูลบอร์ด";
 
-  var msg = "📊 สถานะทุกบอร์ด (" + latestPerBoard.size + " บอร์ด)\n─────────────────\n";
+  var msg = "📊 (" + latestPerBoard.size + " บอร์ด)\n─────\n";
   var boards = Array.from(latestPerBoard.keys());
   for (var b = 0; b < boards.length; b++) {
     var d = latestPerBoard.get(boards[b]);
@@ -377,13 +366,13 @@ function getAllBoardStatus() {
     msg += "📟 " + d[1] + "\n🌡️ " + d[2] + " °C";
     if (d[3] !== "" && d[3] !== 0) msg += "  💧 " + d[3] + " %";
     msg += "\n🕐 " + boardTime;
-    if (b < boards.length - 1) msg += "\n─────────────────\n";
+    if (b < boards.length - 1) msg += "\n─────\n";
   }
   return msg;
 }
 
 // ============================================================
-// generateDailyReport
+// generateDailyReport — QuickChart กราฟ 24 ชม.
 // ============================================================
 function generateDailyReport(boardId) {
   var sheet = getSheet();
@@ -401,7 +390,7 @@ function generateDailyReport(boardId) {
       if (rowDate >= oneDayAgo && data[i][1]) { targetBoard = String(data[i][1]); break; }
     }
   }
-  if (targetBoard === "") return { text: "❌ ไม่พบข้อมูลบอร์ดใดๆ ในช่วง 24 ชั่วโมงที่ผ่านมา", chartUrl: null };
+  if (targetBoard === "") return { text: "❌ ไม่พบข้อมูลบอร์ดใดๆ ใน 24 ชม.", chartUrl: null };
 
   var filtered = [];
   var targetLower = targetBoard.toLowerCase();
@@ -415,7 +404,7 @@ function generateDailyReport(boardId) {
       });
     }
   }
-  if (filtered.length === 0) return { text: "❌ ไม่พบข้อมูลสำหรับบอร์ด \"" + targetBoard + "\" ในช่วง 24 ชั่วโมงที่ผ่านมา", chartUrl: null };
+  if (filtered.length === 0) return { text: "❌ ไม่พบข้อมูลบอร์ด \"" + targetBoard + "\" ใน 24 ชม.", chartUrl: null };
 
   var realBoardName = targetBoard;
   for (var i = data.length - 1; i >= 0; i--) {
@@ -441,10 +430,6 @@ function generateDailyReport(boardId) {
   var minTempStr = minTemp !== 999 ? minTemp.toFixed(1) + "°C" : "N/A";
   var maxTempStr = maxTemp !== -999 ? maxTemp.toFixed(1) + "°C" : "N/A";
   var avgTempStr = avgTemp !== "N/A" ? avgTemp + "°C" : "N/A";
-
-  var minHumidStr = minHumid !== 999 ? minHumid.toFixed(1) + "%" : "N/A";
-  var maxHumidStr = maxHumid !== -999 ? maxHumid.toFixed(1) + "%" : "N/A";
-  var avgHumidStr = avgHumid !== "N/A" ? avgHumid + "%" : "N/A";
 
   var hasHumid = countHumid > 0;
 
@@ -477,9 +462,11 @@ function generateDailyReport(boardId) {
     tempData.push(buckets[b].temps.length > 0
       ? parseFloat((buckets[b].temps.reduce(function(x, y) { return x + y; }, 0) / buckets[b].temps.length).toFixed(1))
       : (tempData.length > 0 ? tempData[tempData.length - 1] : null));
-    humidData.push(buckets[b].humids.length > 0
-      ? parseFloat((buckets[b].humids.reduce(function(x, y) { return x + y; }, 0) / buckets[b].humids.length).toFixed(1))
-      : (humidData.length > 0 ? humidData[humidData.length - 1] : null));
+    if (hasHumid) {
+      humidData.push(buckets[b].humids.length > 0
+        ? parseFloat((buckets[b].humids.reduce(function(x, y) { return x + y; }, 0) / buckets[b].humids.length).toFixed(1))
+        : (humidData.length > 0 ? humidData[humidData.length - 1] : null));
+    }
   }
 
   var chartConfig = {
@@ -495,7 +482,7 @@ function generateDailyReport(boardId) {
       }]
     },
     options: {
-      title: { display: true, text: 'Daily Report: ' + realBoardName + ' (Last 24 Hours)', fontSize: 14, fontStyle: 'bold' },
+      title: { display: true, text: 'Daily: ' + realBoardName, fontSize: 14, fontStyle: 'bold' },
       legend: { display: true, position: 'bottom', labels: { fontSize: 10 } },
       scales: {
         xAxes: [{ gridLines: { display: false }, ticks: { fontSize: 8, maxTicksLimit: 12 } }],
@@ -541,15 +528,15 @@ function generateDailyReport(boardId) {
     chartUrl = "https://quickchart.io/chart?w=600&h=380&bkg=white&c=" + encodeURIComponent(JSON.stringify(chartConfig));
   }
 
-  var msg = "📊 " + realBoardName + " - สรุป 24 ชม.\n──────────────────\n🌡️ อุณหภูมิ: " + minTempStr + " - " + maxTempStr + " (เฉลี่ย " + avgTempStr + ")\n";
-  if (hasHumid) msg += "💧 ความชื้น: " + minHumidStr + " - " + maxHumidStr + " (เฉลี่ย " + avgHumidStr + ")\n";
-  msg += "📈 บันทึก " + filtered.length + " ครั้ง\n──────────────────";
+  var msg = "📊 " + realBoardName + " — 24 ชม.\n──────\n🌡️ " + minTempStr + " - " + maxTempStr + " (เฉลี่ย " + avgTempStr + ")\n";
+  if (hasHumid) msg += "💧 " + (minHumid !== 999 ? minHumid.toFixed(1) + "%" : "N/A") + " - " + (maxHumid !== -999 ? maxHumid.toFixed(1) + "%" : "N/A") + " (เฉลี่ย " + avgHumid + ")\n";
+  msg += "📈 " + filtered.length + " ครั้ง\n──────";
 
   return { text: msg, chartUrl: chartUrl, boardId: realBoardName };
 }
 
 // ============================================================
-// sendDailyReportPush — ส่งรายงานอัตโนมัติ
+// sendDailyReportPush — รายงานอัตโนมัติ 24 ชม.
 // ============================================================
 function sendDailyReportPush() {
   try {
@@ -580,10 +567,9 @@ function sendDailyReportPush() {
 
       pushToLine(targetId, messages);
 
-      // ✅ IoTcenter: ส่ง DAILY_REPORT
       sendToIoTcenter(boards[b], 'DAILY_REPORT', 'info',
         'สรุป 24 ชม. ' + boards[b],
-        { boardId: boards[b], records: report.boardId ? 0 : 0 }
+        { boardId: boards[b] }
       );
 
       Utilities.sleep(1500);
@@ -594,7 +580,7 @@ function sendDailyReportPush() {
 }
 
 // ============================================================
-// pushToLine
+// pushToLine — LINE Push (หลายข้อความ)
 // ============================================================
 function pushToLine(targetId, messages, retries) {
   var token = PropertiesService.getScriptProperties().getProperty("LINE_TOKEN");
@@ -616,7 +602,7 @@ function pushToLine(targetId, messages, retries) {
 }
 
 // ============================================================
-// replyToLine
+// replyToLine — LINE Reply (Quick Reply)
 // ============================================================
 function replyToLine(replyToken, messages, retries) {
   var token = PropertiesService.getScriptProperties().getProperty("LINE_TOKEN");
@@ -645,11 +631,35 @@ function replyToLine(replyToken, messages, retries) {
 }
 
 // ============================================================
+// pushMessage — ส่ง LINE ข้อความเดียว (สำหรับ Trigger)
+// ============================================================
+function pushMessage(text) {
+  var config = getConfig();
+  if (!config.token || !config.groupId) {
+    Logger.log("pushMessage: Missing ACCESS_TOKEN or GROUP_ID");
+    return;
+  }
+  pushToLine(config.groupId, [{ type: "text", text: text }]);
+}
+
+// ============================================================
 // Helpers: Sheet, Settings, Thresholds
 // ============================================================
 function getSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   return SHEET_NAME ? (ss.getSheetByName(SHEET_NAME) || ss.getActiveSheet()) : ss.getActiveSheet();
+}
+
+function getTargetSheet() {
+  return SpreadsheetApp.openById(TARGET_SPREADSHEET_ID).getSheets()[0];
+}
+
+function getConfig() {
+  const props = PropertiesService.getScriptProperties();
+  return {
+    token: props.getProperty('ACCESS_TOKEN'),
+    groupId: props.getProperty('GROUP_ID')
+  };
 }
 
 function getSettingsSheet() {
@@ -719,7 +729,7 @@ function trimOldRows(sheet) {
 }
 
 // ============================================================
-// checkAndNotify — ตรวจสอบ threshold + LINE notify
+// checkAndNotify — ตรวจ threshold + LINE + IoTcenter
 // ============================================================
 var ALERT_COOLDOWN_MS = 1800000;
 var HYSTERESIS_TEMP = 0.5;
@@ -770,20 +780,12 @@ function checkAndNotify(boardId, temp, humid) {
   var newState = "NORMAL";
 
   if (newTempState !== "NORMAL") {
-    if (newTempState === "LOW") {
-      messages.push("⚠️ อุณหภูมิต่ำกว่าค่าตั้ง\n🌡️ " + temp.toFixed(1) + " °C\n📉 ต่ำสุด: " + minT + " °C\n📟 " + boardId);
-    } else {
-      messages.push("⚠️ อุณหภูมิสูงกว่าค่าตั้ง\n🌡️ " + temp.toFixed(1) + " °C\n📈 สูงสุด: " + maxT + " °C\n📟 " + boardId);
-    }
+    messages.push("⚠️ " + (newTempState === "LOW" ? "อุณหภูมิต่ำ" : "อุณหภูมิสูง") + "\n🌡️ " + temp.toFixed(1) + " °C\n📟 " + boardId);
     newState = "ALERT";
   }
 
   if (newHumidState !== "NORMAL") {
-    if (newHumidState === "LOW") {
-      messages.push("⚠️ ความชื้นต่ำกว่าค่าตั้ง\n💧 " + humid.toFixed(1) + " %\n📉 ต่ำสุด: " + minH + " %\n📟 " + boardId);
-    } else {
-      messages.push("⚠️ ความชื้นสูงกว่าค่าตั้ง\n💧 " + humid.toFixed(1) + " %\n📈 สูงสุด: " + maxH + " %\n📟 " + boardId);
-    }
+    messages.push("⚠️ " + (newHumidState === "LOW" ? "ความชื้นต่ำ" : "ความชื้นสูง") + "\n💧 " + humid.toFixed(1) + " %\n📟 " + boardId);
     newState = "ALERT";
   }
 
@@ -802,26 +804,34 @@ function checkAndNotify(boardId, temp, humid) {
     var targetId = props.getProperty("LINE_TARGET_ID");
     var token = props.getProperty("LINE_TOKEN");
     if (targetId && token) {
-      for (var i = 0; i < messages.length; i++) { pushNotifyToLine(targetId, messages[i], token); Utilities.sleep(500); }
+      for (var i = 0; i < messages.length; i++) {
+        var opt = {
+          method: "POST", contentType: "application/json",
+          headers: { "Authorization": "Bearer " + token },
+          payload: JSON.stringify({ to: targetId, messages: [{ type: "text", text: messages[i] }] }),
+          muteHttpExceptions: true
+        };
+        try { UrlFetchApp.fetch(LINE_PUSH_URL, opt); } catch (e) {}
+        Utilities.sleep(500);
+      }
       props.setProperty(lastTimeKey, now.toString());
     }
   }
 
-  // ✅ IoTcenter: ส่ง alert/recovery events
   if (shouldSend) {
     if (newTempState === 'HIGH') {
       sendToIoTcenter(boardId, 'HIGH_TEMP', 'warning',
-        'อุณหภูมิสูงเกิน: ' + temp.toFixed(1) + '°C (max: ' + maxT + '°C)',
-        { temperature: temp, threshold: maxT, maxTemp: maxT }
+        temp.toFixed(1) + '°C (max: ' + maxT + '°C)',
+        { temperature: temp, threshold: maxT }
       );
     } else if (newTempState === 'LOW') {
       sendToIoTcenter(boardId, 'LOW_TEMP', 'warning',
-        'อุณหภูมิต่ำเกิน: ' + temp.toFixed(1) + '°C (min: ' + minT + '°C)',
-        { temperature: temp, threshold: minT, minTemp: minT }
+        temp.toFixed(1) + '°C (min: ' + minT + '°C)',
+        { temperature: temp, threshold: minT }
       );
     } else if (newState === 'NORMAL') {
       sendToIoTcenter(boardId, 'TEMP_RECOVERY', 'recovery',
-        'อุณหภูมิกลับมาปกติ: ' + temp.toFixed(1) + '°C',
+        'ปกติ: ' + temp.toFixed(1) + '°C',
         { temperature: temp }
       );
     }
@@ -832,18 +842,275 @@ function checkAndNotify(boardId, temp, humid) {
   props.setProperty(lastHumidStateKey, newHumidState);
 }
 
-function pushNotifyToLine(targetId, message, token) {
-  var options = {
-    method: "POST", contentType: "application/json",
-    headers: { "Authorization": "Bearer " + token },
-    payload: JSON.stringify({ to: targetId, messages: [{ type: "text", text: message }] }),
-    muteHttpExceptions: true
-  };
-  try { UrlFetchApp.fetch(LINE_PUSH_URL, options); } catch (e) { Logger.log("LINE Notify error: " + e.toString()); }
+// ============================================================
+// iotcenterHeartbeat — cron ทุก 15 นาที
+// ============================================================
+function iotcenterHeartbeat() {
+  var iotCfg = getIoTcenterConfig();
+  IoTcenter.init(iotCfg.apiUrl, iotCfg.apiKey, iotCfg.deviceName, iotCfg.deviceType);
+
+  var sheet = getSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) { IoTcenter.sendHeartbeat(); return; }
+
+  var row = sheet.getRange(lastRow, 1, 1, 5).getValues()[0];
+  var temp = parseFloat(row[2]);
+  var payload = {};
+  if (!isNaN(temp) && temp <= MAX_PLAUSIBLE_TEMP) payload.lastTemperature = temp;
+
+  IoTcenter.sendHeartbeat(iotCfg.deviceName, iotCfg.deviceType, payload);
 }
 
 // ============================================================
-// respond: ContentService helper
+// heartbeat — บอก IoTcenter ว่าทำงาน
+// ============================================================
+function heartbeat() {
+  var iotCfg = getIoTcenterConfig();
+  IoTcenter.init(iotCfg.apiUrl, iotCfg.apiKey, iotCfg.deviceName, iotCfg.deviceType);
+
+  try {
+    var sheet = getTargetSheet();
+    var lastRow = sheet.getLastRow();
+    var lastTemp = lastRow >= 2 ? sheet.getRange(lastRow, TEMP_COLUMN).getValue() : null;
+
+    IoTcenter.sendHeartbeat(iotCfg.deviceName, iotCfg.deviceType, {
+      lastTemperature: lastTemp,
+      lastRow: lastRow
+    });
+  } catch (e) {
+    IoTcenter.sendHeartbeat();
+  }
+}
+
+// ============================================================
+// checkSensorStatus — ตรวจ Sensor ขาดการติดต่อ
+// ============================================================
+function checkSensorStatus() {
+  var iotCfg = getIoTcenterConfig();
+  IoTcenter.init(iotCfg.apiUrl, iotCfg.apiKey, iotCfg.deviceName, iotCfg.deviceType);
+
+  var sheet = getTargetSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) { IoTcenter.sendHeartbeat(); return; }
+
+  var lastValue = sheet.getRange(lastRow, 1).getValue();
+  var lastTemp = sheet.getRange(lastRow, TEMP_COLUMN).getValue();
+
+  var props = PropertiesService.getScriptProperties();
+  var lastStatus = props.getProperty("SENSOR_STATUS");
+
+  var lastDate = parseDate(lastValue);
+
+  if (lastDate && !isNaN(lastDate.getTime())) {
+    var now = new Date();
+    var diffInMinutes = (now.getTime() - lastDate.getTime()) / (1000 * 60);
+
+    if (diffInMinutes > 35) {
+      if (lastStatus !== "OFFLINE") {
+        var lastTimeStr = Utilities.formatDate(lastDate, Session.getScriptTimeZone(), "HH:mm (dd/MM/yyyy)");
+        pushMessage("🚨 ขาดการติดต่อจาก Sensor!\n─────────\n🌡️ ล่าสุด: " + lastTemp + " °C\n🕒 " + lastTimeStr + "\n📢 ตรวจสอบอุปกรณ์");
+
+        props.setProperty("SENSOR_STATUS", "OFFLINE");
+
+        IoTcenter.sendEvent('SENSOR_OFFLINE', 'critical',
+          'Sensor ขาดการติดต่อ > ' + Math.round(diffInMinutes) + ' นาที',
+          { lastTemperature: lastTemp, lastContact: lastDate.toISOString(), minutesSinceLastContact: Math.round(diffInMinutes) }
+        );
+      }
+    } else {
+      if (lastStatus === "OFFLINE") {
+        pushMessage("✅ Sensor กลับมาปกติแล้ว!\n─────────\n🌡️ " + lastTemp + " °C\n⏰ " + Utilities.formatDate(lastDate, Session.getScriptTimeZone(), "HH:mm"));
+
+        props.setProperty("SENSOR_STATUS", "OK");
+
+        IoTcenter.sendEvent('SENSOR_RECOVERY', 'recovery',
+          'Sensor กลับมาทำงานปกติ',
+          { temperature: lastTemp }
+        );
+      }
+    }
+  }
+
+  IoTcenter.sendHeartbeat();
+}
+
+// ============================================================
+// checkTemperatureAlert — แจ้งเตือนอุณหภูมิเกิน
+// ============================================================
+function checkTemperatureAlert() {
+  var iotCfg = getIoTcenterConfig();
+  IoTcenter.init(iotCfg.apiUrl, iotCfg.apiKey, iotCfg.deviceName, iotCfg.deviceType);
+
+  var sheet = getTargetSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) { IoTcenter.sendHeartbeat(); return; }
+
+  var currentTemp = sheet.getRange(lastRow, TEMP_COLUMN).getValue();
+
+  if (!isNaN(currentTemp) && currentTemp <= MAX_PLAUSIBLE_TEMP) {
+    if (currentTemp >= THRESHOLD) {
+      pushMessage("⚠️ อุณหภูมิสูงเกิน!\n─────────\n🌡️ " + currentTemp.toFixed(1) + " °C\n❗ เกณฑ์: " + THRESHOLD + " °C\n📢 ตรวจสอบ!");
+
+      IoTcenter.sendEvent('HIGH_TEMP', 'warning',
+        currentTemp.toFixed(1) + '°C (threshold: ' + THRESHOLD + '°C)',
+        { temperature: currentTemp, threshold: THRESHOLD }
+      );
+    } else {
+      IoTcenter.sendEvent('TEMP_NORMAL', 'info',
+        currentTemp.toFixed(1) + '°C',
+        { temperature: currentTemp }
+      );
+    }
+  }
+
+  IoTcenter.sendHeartbeat();
+}
+
+// ============================================================
+// sendDailySummary — สรุปประจำวัน
+// ============================================================
+function sendDailySummary() {
+  var iotCfg = getIoTcenterConfig();
+  IoTcenter.init(iotCfg.apiUrl, iotCfg.apiKey, iotCfg.deviceName, iotCfg.deviceType);
+
+  var sheet = getTargetSheet();
+  var data = sheet.getDataRange().getValues();
+
+  var yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  var targetDateStr = Utilities.formatDate(yesterday, Session.getScriptTimeZone(), "dd/MM/yyyy");
+
+  var validCount = 0;
+  var minTemp = Infinity;
+  var maxTemp = -Infinity;
+  var sumTemp = 0;
+
+  for (var i = data.length - 1; i >= 1; i--) {
+    var valDate = data[i][0];
+    if (!valDate) continue;
+
+    var rowDate = parseDate(valDate);
+    if (isNaN(rowDate.getTime())) continue;
+
+    var rowDateStr = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), "dd/MM/yyyy");
+
+    if (rowDateStr === targetDateStr) {
+      var temp = parseFloat(data[i][TEMP_IDX]);
+      if (!isNaN(temp) && temp <= MAX_PLAUSIBLE_TEMP && temp >= MIN_PLAUSIBLE_TEMP) {
+        if (temp < minTemp) minTemp = temp;
+        if (temp > maxTemp) maxTemp = temp;
+        sumTemp += temp;
+        validCount++;
+      }
+    } else if (validCount > 0) {
+      break;
+    }
+  }
+
+  if (validCount > 0) {
+    var avgTemp = sumTemp / validCount;
+    pushMessage("📊 สรุปอุณหภูมิ " + targetDateStr + "\n─────────\n🌡️ สูงสุด: " + maxTemp.toFixed(1) + " °C\n❄️ ต่ำสุด: " + minTemp.toFixed(1) + " °C\n📈 เฉลี่ย: " + avgTemp.toFixed(1) + " °C");
+
+    IoTcenter.sendEvent('DAILY_REPORT', 'info',
+      'สรุป ' + targetDateStr + ' | สูงสุด ' + maxTemp.toFixed(1) + '°C / ต่ำสุด ' + minTemp.toFixed(1) + '°C / เฉลี่ย ' + avgTemp.toFixed(1) + '°C',
+      { date: targetDateStr, maxTemp: maxTemp, minTemp: minTemp, avgTemp: avgTemp, recordsCount: validCount }
+    );
+  } else {
+    pushMessage("⚠️ ไม่พบข้อมูลวันที่ " + targetDateStr);
+    IoTcenter.sendEvent('DAILY_REPORT_EMPTY', 'warning', 'ไม่พบข้อมูลวันที่ ' + targetDateStr, { date: targetDateStr });
+  }
+
+  IoTcenter.sendHeartbeat();
+}
+
+// ============================================================
+// Shift Reports — ทุก 8 ชั่วโมง
+// ============================================================
+function sendReport_00_08() { generateReport(0, 8, "00.00-08.00", 0); }
+function sendReport_08_16() { generateReport(8, 16, "08.00-16.00", 0); }
+function sendReport_16_00() { generateReport(16, 24, "16.00-24.00", -1); }
+
+function generateReport(startHour, endHour, periodName, daysOffset) {
+  var iotCfg = getIoTcenterConfig();
+  IoTcenter.init(iotCfg.apiUrl, iotCfg.apiKey, iotCfg.deviceName, iotCfg.deviceType);
+
+  var sheet = getTargetSheet();
+  var data = sheet.getDataRange().getValues();
+
+  var targetDate = new Date();
+  targetDate.setDate(targetDate.getDate() + daysOffset);
+
+  var targetD = targetDate.getDate();
+  var targetM = targetDate.getMonth();
+  var targetY = targetDate.getFullYear();
+
+  var minTemp = Infinity;
+  var maxTemp = -Infinity;
+  var sumTemp = 0;
+  var count = 0;
+  var hasData = false;
+
+  for (var i = 1; i < data.length; i++) {
+    var dateObj = parseDate(data[i][0]);
+    if (isNaN(dateObj.getTime())) continue;
+
+    if (dateObj.getDate() === targetD && dateObj.getMonth() === targetM && dateObj.getFullYear() === targetY) {
+      var rowHour = dateObj.getHours();
+      if (rowHour >= startHour && rowHour < endHour) {
+        var temp = parseFloat(data[i][TEMP_IDX]);
+        if (!isNaN(temp) && temp <= MAX_PLAUSIBLE_TEMP && temp >= MIN_PLAUSIBLE_TEMP) {
+          if (temp < minTemp) minTemp = temp;
+          if (temp > maxTemp) maxTemp = temp;
+          sumTemp += temp;
+          count++;
+          hasData = true;
+        }
+      }
+    }
+  }
+
+  var dateString = Utilities.formatDate(targetDate, Session.getScriptTimeZone(), "dd/MM/yyyy");
+
+  if (hasData) {
+    var avgTemp = sumTemp / count;
+    pushMessage("📊 " + periodName + " — " + dateString + "\n─────────\n🌡️ สูงสุด: " + maxTemp.toFixed(1) + " °C\n❄️ ต่ำสุด: " + minTemp.toFixed(1) + " °C\n📈 เฉลี่ย: " + avgTemp.toFixed(1) + " °C");
+
+    IoTcenter.sendEvent('SHIFT_REPORT', 'info',
+      periodName + ' — ' + dateString + ' | สูงสุด ' + maxTemp.toFixed(1) + '°C / ต่ำสุด ' + minTemp.toFixed(1) + '°C / เฉลี่ย ' + avgTemp.toFixed(1) + '°C',
+      { period: periodName, date: dateString, maxTemp: maxTemp, minTemp: minTemp, avgTemp: avgTemp, recordsCount: count }
+    );
+  } else {
+    pushMessage("⚠️ ไม่พบข้อมูลช่วง " + periodName + " — " + dateString);
+    IoTcenter.sendEvent('SHIFT_REPORT_EMPTY', 'warning', 'ไม่พบข้อมูลช่วง ' + periodName, { period: periodName });
+  }
+
+  IoTcenter.sendHeartbeat();
+}
+
+// ============================================================
+// parseDate — แปลงวันที่หลายรูปแบบ
+// ============================================================
+function parseDate(valDate) {
+  if (valDate instanceof Date) return valDate;
+  var cleanStr = valDate.toString().replace(/-/g, "/").trim();
+  var dateObj = new Date(cleanStr);
+
+  if (isNaN(dateObj.getTime())) {
+    var m = cleanStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m) {
+      dateObj = new Date(m[3], m[2]-1, m[1]);
+      var hMatch = cleanStr.match(/\s(\d{1,2}):(\d{1,2})/);
+      if (hMatch) {
+        dateObj.setHours(hMatch[1]);
+        dateObj.setMinutes(hMatch[2]);
+      }
+    }
+  }
+  return dateObj;
+}
+
+// ============================================================
+// respond
 // ============================================================
 function respond(text) {
   return ContentService.createTextOutput(text).setMimeType(ContentService.MimeType.TEXT);
