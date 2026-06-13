@@ -101,3 +101,25 @@ void sendLineNotify(String message) {
 float getTempCalibrationOffset() {
   return atof(tempCalibrationStr);
 }
+
+// ===== isNewerVersion =====
+static void parseVer(String v, int &a, int &b, int &c) {
+  v.trim();
+  a = b = c = 0;
+  int p1 = v.indexOf('.');
+  if (p1 < 0) { a = v.toInt(); return; }
+  a = v.substring(0, p1).toInt();
+  int p2 = v.indexOf('.', p1 + 1);
+  if (p2 < 0) { b = v.substring(p1 + 1).toInt(); return; }
+  b = v.substring(p1 + 1, p2).toInt();
+  c = v.substring(p2 + 1).toInt();
+}
+
+bool isNewerVersion(String latest, String current) {
+  int la, lb, lc, ca, cb, cc;
+  parseVer(latest, la, lb, lc);
+  parseVer(current, ca, cb, cc);
+  if (la != ca) return la > ca;
+  if (lb != cb) return lb > cb;
+  return lc > cc;
+}

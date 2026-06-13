@@ -28,4 +28,8 @@ void sendLineNotify(String message);
 // Get temperature calibration offset
 float getTempCalibrationOffset();
 
+// Compare semver "major.minor.patch": true if 'latest' is strictly newer than
+// 'current'. Used by OTA so boards only ever upgrade, never downgrade.
+bool isNewerVersion(String latest, String current);
+
 #endif

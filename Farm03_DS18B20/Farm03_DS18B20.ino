@@ -17,7 +17,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.4"
+#define FIRMWARE_VERSION "1.0.5"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DS18B20)
@@ -1028,7 +1028,7 @@ void checkForOTAUpdate() {
 
   Serial.printf("Current: %s, Latest: %s\n", FIRMWARE_VERSION, latestVersion.c_str());
 
-  if (latestVersion != String(FIRMWARE_VERSION)) {
+  if (isNewerVersion(latestVersion, String(FIRMWARE_VERSION))) {  // อัปเฉพาะที่ใหม่กว่า ไม่ downgrade
     Serial.printf("New firmware version %s available. Updating...\n", latestVersion.c_str());
 
     display.clearDisplay();
