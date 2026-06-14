@@ -228,10 +228,11 @@ function doGet(e) {
     if (e.parameter.notify) {
       var np = PropertiesService.getScriptProperties();
       var target = np.getProperty("LINE_TARGET_ID") || np.getProperty("GROUP_ID");
-      if (target) pushToLine(target, { type: "text", text: e.parameter.notify });
       var notifyMsg = e.parameter.notify;
       var notifyBoard = (boardId || "").trim();
-      if (notifyMsg.indexOf("Watchdog") !== -1 || notifyMsg.indexOf("WDT") !== -1) {
+      var isWDT = notifyMsg.indexOf("Watchdog") !== -1 || notifyMsg.indexOf("WDT") !== -1;
+      if (!isWDT && target) pushToLine(target, { type: "text", text: notifyMsg });
+      if (isWDT) {
         sendToIoTcenter(notifyBoard, 'BOOT_WDT', 'critical', notifyMsg, { boardId: notifyBoard });
       } else if (notifyMsg.indexOf("BOOT") !== -1) {
         sendToIoTcenter(notifyBoard, 'BOOT', 'info', notifyMsg, { boardId: notifyBoard });
