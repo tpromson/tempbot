@@ -1,5 +1,5 @@
 *.elf
 *.hex
-/build
+**/build/
 /.pio
 .DS_Store
