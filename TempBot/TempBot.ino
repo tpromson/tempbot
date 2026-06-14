@@ -9,6 +9,7 @@
 #include <WiFiManager.h>
 #include <LittleFS.h>
 #include <ArduinoOTA.h>
+#include <Ticker.h>
 #ifdef SENSOR_DHT22
 #include <DHT.h>
 #else
@@ -25,7 +26,13 @@
 #include <tempbot_common.h>
 #include <ArduinoJson.h>
 
-#define FIRMWARE_VERSION "1.0.18"
+#define FIRMWARE_VERSION "1.0.19"
+
+// Feed Hardware WDT every 1s during blocking HTTP calls via Ticker interrupt
+static Ticker _httpWdtTicker;
+static void _httpWdtFeed() { ESP.wdtFeed(); }
+static void startHttpCall() { ESP.wdtDisable(); _httpWdtTicker.attach_ms(1000, _httpWdtFeed); }
+static void endHttpCall()   { _httpWdtTicker.detach(); ESP.wdtEnable(8000); }
 
 #define SENSOR_PIN 14
 #define SCREEN_WIDTH 128
@@ -556,7 +563,7 @@ void flushQueue() {
       if (ts.length() > 0 && ts != "0") url += "&timestamp=" + ts;
 #endif
       HTTPClient http; bool ok = false;
-      ESP.wdtDisable();
+      startHttpCall();
       if (http.begin(client, url)) {
         http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
         int code = http.GET();
@@ -565,7 +572,7 @@ void flushQueue() {
         if (!ok) Serial.println("Flush failed: HTTP " + String(code));
         http.end();
       }
-      ESP.wdtEnable(8000);
+      endHttpCall();
       client.stop();
       if (ok) {
         sentCount++;
@@ -663,12 +670,12 @@ bool syncToGAS(WiFiClientSecure &client) {
   String url = String(webAppUrl) + "?temperature=" + String(currentTemp,1)
              + "&board_id=" + urlEncode(getBoardIdentifier());
 #endif
-  ESP.wdtDisable();
-  if (!http.begin(client, url)) { ESP.wdtEnable(8000); currentStatus = "ERR HTTP_BEGIN"; return false; }
+  startHttpCall();
+  if (!http.begin(client, url)) { endHttpCall(); currentStatus = "ERR HTTP_BEGIN"; return false; }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
   int httpCode = http.GET();
   String payload = (httpCode == 200) ? http.getString() : "";
-  ESP.wdtEnable(8000);
+  endHttpCall();
   if (httpCode != 200 || !payload.startsWith("OK")) {
     currentStatus = "ERR " + String(httpCode);
     Serial.println("syncToGAS: HTTP " + String(httpCode));
@@ -683,10 +690,10 @@ void fetchAndApplySettings() {
   WiFiClientSecure client; client.setInsecure(); client.setBufferSizes(4096, 1024);
   HTTPClient http;
   String url = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(getBoardIdentifier());
-  ESP.wdtDisable();
-  if (!http.begin(client, url)) { ESP.wdtEnable(8000); return; }
+  startHttpCall();
+  if (!http.begin(client, url)) { endHttpCall(); return; }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
-  int sc = http.GET(); ESP.wdtEnable(8000);
+  int sc = http.GET(); endHttpCall();
   if (sc != 200) { http.end(); Serial.println("fetchSettings HTTP: " + String(sc)); return; }
   String payload = http.getString(); http.end();
   Serial.println("fetchSettings payload: " + payload);
@@ -804,11 +811,11 @@ void checkForOTAUpdate() {
 
   WiFiClientSecure client; client.setInsecure(); client.setBufferSizes(16384, 512);
   HTTPClient http;
-  ESP.wdtDisable();
-  if (!http.begin(client, otaVersionUrl)) { ESP.wdtEnable(8000); return; }
+  startHttpCall();
+  if (!http.begin(client, otaVersionUrl)) { endHttpCall(); return; }
   int code = http.GET();
   String latest = (code == 200) ? http.getString() : "";
-  ESP.wdtEnable(8000); http.end();
+  endHttpCall(); http.end();
   if (code != 200) return;
   latest.trim();
   Serial.printf("OTA: current=%s latest=%s\n", FIRMWARE_VERSION, latest.c_str());
@@ -821,8 +828,9 @@ void checkForOTAUpdate() {
   display.setCursor(10, 45); display.println("Downloading..."); display.display();
 
   client.stop();
-  ESP.wdtDisable();
+  startHttpCall();
   t_httpUpdate_return ret = ESPhttpUpdate.update(client, otaBinUrl);
+  endHttpCall();
   if (ret == HTTP_UPDATE_FAILED) {
     display.clearDisplay(); display.setTextSize(1); display.setTextColor(WHITE);
     display.setCursor(10, 20); display.println("OTA FAILED!");
