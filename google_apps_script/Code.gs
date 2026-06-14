@@ -36,6 +36,21 @@
  *   checkSensorStatus()   → ทุก 30 นาที — แจ้งเตือนถ้าบอร์ดขาดการติดต่อ > 35 นาที
  *   sendDailyReportPush() → วันละครั้ง — ส่งรายงาน 24 ชม. ทุกบอร์ด
  *   iotcenterHeartbeat()  → ทุก 15 นาที — ping IoTcenter
+ *
+ * ── การ Deploy ──
+ *   1. เปิด Apps Script editor → คลิก "Deploy" → "New deployment"
+ *   2. Type: "Web app"
+ *   3. Execute as: "Me" (บัญชีเจ้าของ script)
+ *   4. Who has access: "Anyone" (ESP8266 ไม่มี Google account)
+ *   5. คลิก "Deploy" → copy Web App URL
+ *   6. นำ URL ไปกรอกใน ESP8266 config field "Google WebApp URL"
+ *
+ *   ⚠️  ทุกครั้งที่แก้ code ต้อง Deploy ใหม่ ("Manage deployments" → "Edit" → version ใหม่)
+ *       URL เดิมใช้ได้ตลอด ไม่ต้องอัปเดตบอร์ด
+ *
+ *   ⚠️  ถ้า script ผูกกับ Google Sheet:
+ *       Extensions → Apps Script → Deploy จาก editor ของ Sheet นั้น
+ *       แต่ละ Farm ใช้ Sheet แยกกัน → Deploy แยกกัน → URL แยกกัน
  */
 
 // ============================================================
