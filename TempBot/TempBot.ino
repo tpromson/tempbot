@@ -25,7 +25,7 @@
 #include <tempbot_common.h>
 #include <ArduinoJson.h>
 
-#define FIRMWARE_VERSION "1.0.16"
+#define FIRMWARE_VERSION "1.0.17"
 
 #define SENSOR_PIN 14
 #define SCREEN_WIDTH 128
@@ -556,15 +556,16 @@ void flushQueue() {
       if (ts.length() > 0 && ts != "0") url += "&timestamp=" + ts;
 #endif
       HTTPClient http; bool ok = false;
+      ESP.wdtDisable();
       if (http.begin(client, url)) {
         http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
-        ESP.wdtDisable(); int code = http.GET();
+        int code = http.GET();
         String body = (code == 200) ? http.getString() : "";
-        ESP.wdtEnable(8000);
         ok = (code == 200 && body.startsWith("OK"));
         if (!ok) Serial.println("Flush failed: HTTP " + String(code));
         http.end();
       }
+      ESP.wdtEnable(8000);
       client.stop();
       if (ok) {
         sentCount++;
@@ -662,9 +663,9 @@ bool syncToGAS(WiFiClientSecure &client) {
   String url = String(webAppUrl) + "?temperature=" + String(currentTemp,1)
              + "&board_id=" + urlEncode(getBoardIdentifier());
 #endif
-  if (!http.begin(client, url)) { currentStatus = "ERR HTTP_BEGIN"; return false; }
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
   ESP.wdtDisable();
+  if (!http.begin(client, url)) { ESP.wdtEnable(8000); currentStatus = "ERR HTTP_BEGIN"; return false; }
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
   int httpCode = http.GET();
   String payload = (httpCode == 200) ? http.getString() : "";
   ESP.wdtEnable(8000);
@@ -802,8 +803,9 @@ void checkForOTAUpdate() {
 
   WiFiClientSecure client; client.setInsecure(); client.setBufferSizes(16384, 512);
   HTTPClient http;
-  if (!http.begin(client, otaVersionUrl)) return;
-  ESP.wdtDisable(); int code = http.GET();
+  ESP.wdtDisable();
+  if (!http.begin(client, otaVersionUrl)) { ESP.wdtEnable(8000); return; }
+  int code = http.GET();
   String latest = (code == 200) ? http.getString() : "";
   ESP.wdtEnable(8000); http.end();
   if (code != 200) return;
