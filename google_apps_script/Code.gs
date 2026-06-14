@@ -4,11 +4,38 @@
  * Web App (doGet/doPost)  → รับข้อมูล ESP8266 + LINE Bot
  * Time‑Driven Triggers    → ตรวจ Sensor, รายงานอัตโนมัติ
  *
- * Script Properties (File → Project Properties):
- *   LINE_TOKEN            = Channel Access Token
- *   IOTCENTER_API_URL     = https://line-fleetbackend-production.up.railway.app
- *   IOTCENTER_API_KEY     = (จาก IoTcenter)
- *   IOTCENTER_DEVICE      = ชื่อ device
+ * ── Script Properties (Extensions → Apps Script → Project Settings) ──
+ *   LINE_TOKEN        = LINE Channel Access Token
+ *   LINE_TARGET_ID    = LINE Group/Room/User ID (auto-saved เมื่อ bot รับข้อความแรก)
+ *   IOTCENTER_API_URL = https://line-fleetbackend-production.up.railway.app
+ *   IOTCENTER_API_KEY = (จาก IoTcenter dashboard)
+ *   IOTCENTER_DEVICE  = ชื่อ device ใน IoTcenter
+ *
+ * ── Settings Sheet (สร้างอัตโนมัติครั้งแรก) ──
+ *   คอลัมน์: Board ID | Max Temp (°C) | Min Temp (°C) | Bitmap | Updated
+ *   - Board ID  : ต้องตรงกับ "Board Name" ที่กรอกใน ESP8266 config (case-sensitive)
+ *                 ถ้าไม่กรอก board จะใช้ BOARD_XXXXXX (Chip ID)
+ *   - Max Temp  : แจ้งเตือนเมื่ออุณหภูมิสูงกว่าค่านี้ (default 38.0)
+ *   - Min Temp  : แจ้งเตือนเมื่ออุณหภูมิต่ำกว่าค่านี้ (default 20.0)
+ *   - Bitmap    : animation บนจอ OLED — เลือก: cat / chicken / fish / tree (default tree)
+ *                 บอร์ดจะดึงค่านี้ทุกครั้งที่ sync ข้อมูล (ทุก 10 นาที)
+ *   - Updated   : timestamp อัปเดตล่าสุด (auto-filled)
+ *
+ * ── LINE Bot Commands ──
+ *   temp                        → อุณหภูมิล่าสุด
+ *   status                      → สรุปทุกบอร์ด
+ *   สรุป [Board ID]             → รายงาน 24 ชม. + กราฟ
+ *   ตั้ง max 35 [Board ID]      → ตั้งค่าแจ้งเตือนสูงสุด
+ *   ตั้ง min 20 [Board ID]      → ตั้งค่าแจ้งเตือนต่ำสุด
+ *   ตั้ง bitmap fish [Board ID] → เปลี่ยน animation (cat/chicken/fish/tree)
+ *   ดูค่า [Board ID]            → ดูค่าตั้งทั้งหมด
+ *   help                        → แสดงคำสั่งทั้งหมด
+ *   (ถ้าไม่ระบุ Board ID จะใช้ค่า DEFAULT)
+ *
+ * ── Time-Driven Triggers (ตั้งใน Triggers) ──
+ *   checkSensorStatus()   → ทุก 30 นาที — แจ้งเตือนถ้าบอร์ดขาดการติดต่อ > 35 นาที
+ *   sendDailyReportPush() → วันละครั้ง — ส่งรายงาน 24 ชม. ทุกบอร์ด
+ *   iotcenterHeartbeat()  → ทุก 15 นาที — ping IoTcenter
  */
 
 // ============================================================
