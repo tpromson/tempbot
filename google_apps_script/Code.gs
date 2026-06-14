@@ -302,29 +302,38 @@ function handleTextMessage(event) {
     var parts = rawText.trim().split(/\s+/);
     if (parts.length >= 3) {
       var type = parts[1].toLowerCase();
-      var value = parseFloat(parts[2]);
+      var strVal = parts[2].toLowerCase();
+      var numVal = parseFloat(strVal);
       var targetBoard = parts.length >= 4 ? parts.slice(3).join(" ") : "DEFAULT";
-      if (isNaN(value)) {
-        replyToLine(replyToken, "❌ ค่าไม่ถูกต้อง ลองใหม่ เช่น 'ตั้ง max 35'");
+      var VALID_BITMAPS = ["cat", "chicken", "fish", "tree"];
+      if (type === "bitmap") {
+        if (VALID_BITMAPS.indexOf(strVal) === -1) {
+          replyToLine(replyToken, "❌ bitmap ไม่ถูกต้อง\nเลือกได้: " + VALID_BITMAPS.join(", "));
+        } else {
+          saveThreshold(targetBoard, null, null, strVal);
+          replyToLine(replyToken, "✅ " + targetBoard + " bitmap: " + getThresholds(targetBoard).bitmap);
+        }
+      } else if (isNaN(numVal)) {
+        replyToLine(replyToken, "❌ ค่าไม่ถูกต้อง\nลอง: ตั้ง max 35 / ตั้ง min 20 / ตั้ง bitmap cat");
       } else if (type === "max") {
-        saveThreshold(targetBoard, value, null);
+        saveThreshold(targetBoard, numVal, null);
         replyToLine(replyToken, "✅ " + targetBoard + " MAX: " + getThresholds(targetBoard).maxTemp + " °C");
       } else if (type === "min") {
-        saveThreshold(targetBoard, null, value);
+        saveThreshold(targetBoard, null, numVal);
         replyToLine(replyToken, "✅ " + targetBoard + " MIN: " + getThresholds(targetBoard).minTemp + " °C");
       } else {
-        replyToLine(replyToken, "❌ ลอง: ตั้ง max 35 หรือ ตั้ง min 20");
+        replyToLine(replyToken, "❌ ลอง: ตั้ง max 35 / ตั้ง min 20 / ตั้ง bitmap cat");
       }
     } else {
-      replyToLine(replyToken, "❌ ข้อมูลไม่ครบ\nลอง: ตั้ง max 35 หรือ ตั้ง min 20");
+      replyToLine(replyToken, "❌ ข้อมูลไม่ครบ\nลอง: ตั้ง max 35 / ตั้ง min 20 / ตั้ง bitmap cat");
     }
   } else if (text === "ดูค่า" || text === "ตั้งค่า" || text === "ค่า") {
     var parts = rawText.trim().split(/\s+/);
     var targetBoard = parts.length >= 2 ? parts.slice(1).join(" ") : "DEFAULT";
     var t = getThresholds(targetBoard);
-    replyToLine(replyToken, "📋 " + targetBoard + "\n─────\n🌡️ MAX: " + t.maxTemp + " °C\n🌡️ MIN: " + t.minTemp + " °C\n─────\nเปลี่ยน: ตั้ง max 35");
+    replyToLine(replyToken, "📋 " + targetBoard + "\n─────\n🌡️ MAX: " + t.maxTemp + " °C\n🌡️ MIN: " + t.minTemp + " °C\n🖼️ Bitmap: " + t.bitmap + "\n─────\nเปลี่ยน: ตั้ง max 35\nตั้ง bitmap fish");
   } else if (["help", "ช่วยเหลือ", "คำสั่ง", "?"].indexOf(text) !== -1) {
-    replyToLine(replyToken, "📋 TempBot\n─────\n• temp → ล่าสุด\n• status → สรุปทุกบอร์ด\n• สรุป → รายงาน 24 ชม. + กราฟ\n• ตั้ง max 35 → ค่าแจ้งเตือน\n• ดูค่า → ดูค่าตั้ง\n• help → คำสั่งนี้");
+    replyToLine(replyToken, "📋 TempBot\n─────\n• temp → ล่าสุด\n• status → สรุปทุกบอร์ด\n• สรุป → รายงาน 24 ชม. + กราฟ\n• ตั้ง max 35 → แจ้งเตือนสูงสุด\n• ตั้ง min 20 → แจ้งเตือนต่ำสุด\n• ตั้ง bitmap cat → เปลี่ยน animation\n• ดูค่า → ดูค่าตั้ง\n• help → คำสั่งนี้\n─────\nbitmaps: cat, chicken, fish, tree");
   }
 }
 
@@ -700,19 +709,31 @@ function getThresholds(boardId) {
   return result;
 }
 
-function saveThreshold(boardId, maxTemp, minTemp) {
+function saveThreshold(boardId, maxTemp, minTemp, bitmap) {
   var sheet = getSettingsSheet();
   var data = sheet.getDataRange().getValues();
   var now = new Date();
   var formattedTime = Utilities.formatDate(now, TIMEZONE, "yyyy-MM-dd HH:mm");
   var rowIndex = -1;
+  var existingBitmap = DEFAULT_BITMAP;
+  var existingMax = DEFAULT_THRESHOLDS.maxTemp;
+  var existingMin = DEFAULT_THRESHOLDS.minTemp;
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0] || "").trim() === boardId) { rowIndex = i + 1; break; }
+    if (String(data[i][0] || "").trim() === boardId) {
+      rowIndex = i + 1;
+      if (data[i][1] !== "") existingMax = parseFloat(data[i][1]);
+      if (data[i][2] !== "") existingMin = parseFloat(data[i][2]);
+      if (data[i][3] !== "") existingBitmap = String(data[i][3]).trim();
+      break;
+    }
   }
+  var finalMax    = (maxTemp    !== null && maxTemp    !== undefined) ? maxTemp    : existingMax;
+  var finalMin    = (minTemp    !== null && minTemp    !== undefined) ? minTemp    : existingMin;
+  var finalBitmap = (bitmap     !== null && bitmap     !== undefined) ? bitmap     : existingBitmap;
   if (rowIndex > 0) {
-    sheet.getRange(rowIndex, 2, 1, 3).setValues([[maxTemp, minTemp, formattedTime]]);
+    sheet.getRange(rowIndex, 2, 1, 4).setValues([[finalMax, finalMin, finalBitmap, formattedTime]]);
   } else {
-    sheet.appendRow([boardId, maxTemp, minTemp, formattedTime]);
+    sheet.appendRow([boardId, finalMax, finalMin, finalBitmap, formattedTime]);
   }
 }
 
