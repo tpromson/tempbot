@@ -17,7 +17,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.12"
+#define FIRMWARE_VERSION "1.0.13"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DS18B20)
@@ -1085,6 +1085,8 @@ void checkForOTAUpdate() {
     display.println("Downloading...");
     display.display();
 
+    client.stop(); // คืน connection ก่อน reuse ใน ESPhttpUpdate
+    ESP.wdtDisable(); // ปิด WDT ตลอด download+flash (616KB ใช้ > 8 วิ)
     t_httpUpdate_return ret = ESPhttpUpdate.update(client, otaBinUrl);
     switch (ret) {
       case HTTP_UPDATE_FAILED:
