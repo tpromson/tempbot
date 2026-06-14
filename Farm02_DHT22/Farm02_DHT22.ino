@@ -16,7 +16,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.13"
+#define FIRMWARE_VERSION "1.0.14"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DHT22)
@@ -425,20 +425,22 @@ void queueData(float temp, float humid) {
     droppedEntries++;
     saveDroppedCount(droppedEntries);
     Serial.println("Queue full! Removing oldest entry...");
-    File f = LittleFS.open(QUEUE_FILE, "r");
-    if (f) {
-      String remaining = "";
-      f.readStringUntil('\n'); // Skip oldest line
-      while (f.available()) {
-        String line = f.readStringUntil('\n');
+    File src = LittleFS.open(QUEUE_FILE, "r");
+    File dst = LittleFS.open("/qtmp.csv", "w");
+    if (src && dst) {
+      src.readStringUntil('\n'); // skip oldest line
+      while (src.available()) {
+        ESP.wdtFeed();
+        String line = src.readStringUntil('\n');
         line.trim();
-        if (line.length() > 2) remaining += line + "\n";
+        if (line.length() > 2) dst.println(line);
       }
-      f.close();
-      File fw = LittleFS.open(QUEUE_FILE, "w");
-      if (fw) { fw.print(remaining); fw.close(); }
     }
-    size = getQueueSize(); // Re-check size after removal
+    src.close();
+    dst.close();
+    LittleFS.remove(QUEUE_FILE);
+    LittleFS.rename("/qtmp.csv", QUEUE_FILE);
+    size--;
   }
   File f = LittleFS.open(QUEUE_FILE, "a");
   if (f) {
