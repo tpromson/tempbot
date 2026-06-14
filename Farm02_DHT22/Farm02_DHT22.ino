@@ -16,7 +16,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.11"
+#define FIRMWARE_VERSION "1.0.12"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DHT22)
@@ -410,6 +410,7 @@ int getQueueSize() {
   if (!f) return 0;
   int count = 0;
   while (f.available()) {
+    ESP.wdtFeed();
     String line = f.readStringUntil('\n');
     line.trim();
     if (line.length() > 2) count++;
@@ -567,6 +568,7 @@ void flushQueue() {
     if (src && dst) {
       int lineNum = 0;
       while (src.available()) {
+        ESP.wdtFeed();
         String line = src.readStringUntil('\n');
         line.trim();
         if (line.length() <= 2) continue;
