@@ -16,7 +16,7 @@
 #include <ArduinoJson.h>
 
 
-#define FIRMWARE_VERSION "1.0.10"
+#define FIRMWARE_VERSION "1.0.11"
 
 // --- 1. Configuration ---
 #define SENSOR_PIN 14        // ขา D5 (สำหรับ DHT22)
@@ -459,18 +459,7 @@ void flushQueue() {
   }
   if (!LittleFS.exists(QUEUE_FILE)) return;
 
-  File f = LittleFS.open(QUEUE_FILE, "r");
-  if (!f) return;
-
-  String entries[MAX_QUEUE_ENTRIES];
-  int entryCount = 0;
-  while (f.available() && entryCount < MAX_QUEUE_ENTRIES) {
-    String line = f.readStringUntil('\n');
-    line.trim();
-    if (line.length() > 2) entries[entryCount++] = line;
-  }
-  f.close();
-
+  int entryCount = getQueueSize();
   if (entryCount == 0) { LittleFS.remove(QUEUE_FILE); return; }
 
   Serial.print("Flushing "); Serial.print(entryCount); Serial.println(" queued entries...");
@@ -487,71 +476,77 @@ void flushQueue() {
 
   WiFiClientSecure client;
   client.setInsecure();
-  client.setBufferSizes(4096, 1024); // จำกัด TLS buffer กัน OOM
+  client.setBufferSizes(4096, 1024);
   String boardID = getBoardIdentifier();
-
   int sentCount = 0;
-  for (int i = 0; i < entryCount; i++) {
-    ESP.wdtFeed();
-    if (WiFi.status() != WL_CONNECTED) break;
 
-    int firstComma = entries[i].indexOf(',');
-    if (firstComma < 0) { sentCount++; continue; }
-    int secondComma = entries[i].indexOf(',', firstComma + 1);
+  // Pass 1: อ่านและส่งทีละบรรทัด ไม่โหลดทั้งไฟล์เข้า RAM (กัน stack overflow)
+  {
+    File f = LittleFS.open(QUEUE_FILE, "r");
+    while (f.available()) {
+      ESP.wdtFeed();
+      if (WiFi.status() != WL_CONNECTED) break;
 
-    String timestampStr = "";
-    String tempStr = "";
-    String humidStr = "";
+      String line = f.readStringUntil('\n');
+      line.trim();
+      if (line.length() <= 2) continue;
 
-    if (secondComma < 0) {
-      tempStr = entries[i].substring(0, firstComma);
-      humidStr = entries[i].substring(firstComma + 1);
-    } else {
-      timestampStr = entries[i].substring(0, firstComma);
-      tempStr = entries[i].substring(firstComma + 1, secondComma);
-      humidStr = entries[i].substring(secondComma + 1);
+      int firstComma = line.indexOf(',');
+      if (firstComma < 0) { sentCount++; continue; }
+      int secondComma = line.indexOf(',', firstComma + 1);
+
+      String timestampStr = "", tempStr = "", humidStr = "";
+      if (secondComma < 0) {
+        tempStr = line.substring(0, firstComma);
+        humidStr = line.substring(firstComma + 1);
+      } else {
+        timestampStr = line.substring(0, firstComma);
+        tempStr = line.substring(firstComma + 1, secondComma);
+        humidStr = line.substring(secondComma + 1);
+      }
+
+      String url = String(webAppUrl) + "?temperature=" + tempStr
+                 + "&humidity=" + humidStr
+                 + "&board_id=" + urlEncode(boardID)
+                 + "&queued=1";
+      if (timestampStr.length() > 0 && timestampStr != "0") {
+        url += "&timestamp=" + timestampStr;
+      }
+
+      HTTPClient http;
+      bool ok = false;
+      if (http.begin(client, url)) {
+        http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+        http.setTimeout(10000);
+        ESP.wdtDisable();
+        int code = http.GET();
+        String body = (code == 200) ? http.getString() : "";
+        ESP.wdtEnable(8000);
+        ok = (code == 200 && body.startsWith("OK"));
+        if (!ok) Serial.println("Flush failed: HTTP " + String(code) + " body=" + body.substring(0, 16));
+        http.end();
+      } else {
+        Serial.println("Flush http.begin failed");
+      }
+      client.stop();
+
+      if (ok) {
+        sentCount++;
+        display.fillRect(0, 40, 128, 20, BLACK);
+        display.setCursor(5, 42);
+        display.print("Sent: ");
+        display.print(sentCount);
+        display.print("/");
+        display.print(entryCount);
+        display.display();
+      } else {
+        break;
+      }
+      ArduinoOTA.handle();
+      delay(500);
+      yield();
     }
-
-    String url = String(webAppUrl) + "?temperature=" + tempStr
-               + "&humidity=" + humidStr
-               + "&board_id=" + urlEncode(boardID)
-               + "&queued=1";
-    if (timestampStr.length() > 0 && timestampStr != "0") {
-      url += "&timestamp=" + timestampStr;
-    }
-
-    HTTPClient http;
-    bool ok = false;
-    if (http.begin(client, url)) {
-      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-      http.setTimeout(10000);
-      ESP.wdtDisable();
-      int code = http.GET();
-      String body = (code == 200) ? http.getString() : "";
-      ESP.wdtEnable(8000);
-      ok = (code == 200 && body.startsWith("OK"));
-      if (!ok) Serial.println("Flush entry " + String(i) + " failed: HTTP " + String(code) + " body=" + body.substring(0, 16));
-      http.end();
-    } else {
-      Serial.println("Flush entry " + String(i) + " http.begin failed");
-    }
-    client.stop(); // คืน socket/RAM หลังแต่ละรายการ กัน OOM ระหว่าง flush
-
-    if (ok) {
-      sentCount++;
-      display.fillRect(0, 40, 128, 20, BLACK);
-      display.setCursor(5, 42);
-      display.print("Sent: ");
-      display.print(sentCount);
-      display.print("/");
-      display.print(entryCount);
-      display.display();
-    } else {
-      break;
-    }
-    ArduinoOTA.handle();
-    delay(500);
-    yield();
+    f.close();
   }
 
   if (sentCount > 0) {
@@ -562,12 +557,27 @@ void flushQueue() {
   if (sentCount >= entryCount) {
     LittleFS.remove(QUEUE_FILE);
     Serial.println("Queue fully flushed!");
-  } else {
-    File fw = LittleFS.open(QUEUE_FILE, "w");
-    if (fw) {
-      for (int i = sentCount; i < entryCount; i++) fw.println(entries[i]);
-      fw.close();
+    return;
+  }
+
+  // Pass 2: เขียนเฉพาะ entries ที่ยังไม่ได้ส่ง → tmp → rename
+  {
+    File src = LittleFS.open(QUEUE_FILE, "r");
+    File dst = LittleFS.open("/qtmp.csv", "w");
+    if (src && dst) {
+      int lineNum = 0;
+      while (src.available()) {
+        String line = src.readStringUntil('\n');
+        line.trim();
+        if (line.length() <= 2) continue;
+        if (lineNum++ < sentCount) continue;
+        dst.println(line);
+      }
     }
+    src.close();
+    dst.close();
+    LittleFS.remove(QUEUE_FILE);
+    LittleFS.rename("/qtmp.csv", QUEUE_FILE);
     Serial.print("Partial flush: "); Serial.print(sentCount);
     Serial.print("/"); Serial.println(entryCount);
   }
