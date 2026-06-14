@@ -25,7 +25,7 @@
 #include <tempbot_common.h>
 #include <ArduinoJson.h>
 
-#define FIRMWARE_VERSION "1.0.17"
+#define FIRMWARE_VERSION "1.0.18"
 
 #define SENSOR_PIN 14
 #define SCREEN_WIDTH 128
@@ -683,9 +683,10 @@ void fetchAndApplySettings() {
   WiFiClientSecure client; client.setInsecure(); client.setBufferSizes(4096, 1024);
   HTTPClient http;
   String url = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(getBoardIdentifier());
-  if (!http.begin(client, url)) return;
+  ESP.wdtDisable();
+  if (!http.begin(client, url)) { ESP.wdtEnable(8000); return; }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
-  ESP.wdtDisable(); int sc = http.GET(); ESP.wdtEnable(8000);
+  int sc = http.GET(); ESP.wdtEnable(8000);
   if (sc != 200) { http.end(); Serial.println("fetchSettings HTTP: " + String(sc)); return; }
   String payload = http.getString(); http.end();
   Serial.println("fetchSettings payload: " + payload);
