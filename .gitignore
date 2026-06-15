@@ -1,5 +1,7 @@
 *.elf
 *.hex
+*.map
 **/build/
 /.pio
 .DS_Store
+.vscode/
