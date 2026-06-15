@@ -113,9 +113,7 @@ void notifyViaGAS(String message) {
   if (http.begin(client, url)) {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.setTimeout(8000);
-    ESP.wdtDisable();
     int code = http.GET();
-    ESP.wdtEnable(8000);
     Serial.print("notifyViaGAS HTTP "); Serial.println(code);
     http.end();
   }

@@ -26,13 +26,14 @@
 #include <tempbot_common.h>
 #include <ArduinoJson.h>
 
-#define FIRMWARE_VERSION "1.0.20"
+#define FIRMWARE_VERSION "1.0.21"
 
-// Feed Hardware WDT every 1s during blocking HTTP calls via Ticker interrupt
-static Ticker _httpWdtTicker;
-static void _httpWdtFeed() { ESP.wdtFeed(); }
-static void startHttpCall() { ESP.wdtDisable(); _httpWdtTicker.attach_ms(1000, _httpWdtFeed); }
-static void endHttpCall()   { _httpWdtTicker.detach(); ESP.wdtEnable(8000); }
+// Permanent Hardware WDT feed via Ticker (1Hz). Prevents HWDT reset during
+// non-HTTP blocking work (sensor reads, animation, I2C, etc.) since ESP8266
+// loop() does not implicitly feed the Hardware WDT.
+static Ticker _wdtTicker;
+static void _wdtFeed() { ESP.wdtFeed(); }
+static void startWdtFeed() { _wdtTicker.attach_ms(1000, _wdtFeed); }
 
 #define SENSOR_PIN 14
 #define SCREEN_WIDTH 128
@@ -564,7 +565,6 @@ void flushQueue() {
       if (ts.length() > 0 && ts != "0") url += "&timestamp=" + ts;
 #endif
       HTTPClient http; bool ok = false;
-      startHttpCall();
       if (http.begin(client, url)) {
         http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
         int code = http.GET();
@@ -573,7 +573,6 @@ void flushQueue() {
         if (!ok) Serial.println("Flush failed: HTTP " + String(code));
         http.end();
       }
-      endHttpCall();
       client.stop();
       if (ok) {
         sentCount++;
@@ -675,12 +674,10 @@ bool syncToGAS(WiFiClientSecure &client) {
   String url = String(webAppUrl) + "?temperature=" + String(currentTemp,1)
              + "&board_id=" + urlEncode(getBoardIdentifier());
 #endif
-  startHttpCall();
-  if (!http.begin(client, url)) { endHttpCall(); currentStatus = "ERR HTTP_BEGIN"; return false; }
+  if (!http.begin(client, url)) { currentStatus = "ERR HTTP_BEGIN"; return false; }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
   int httpCode = http.GET();
   String payload = (httpCode == 200) ? http.getString() : "";
-  endHttpCall();
   if (httpCode != 200 || !payload.startsWith("OK")) {
     currentStatus = "ERR " + String(httpCode);
     Serial.println("syncToGAS: HTTP " + String(httpCode));
@@ -695,10 +692,9 @@ void fetchAndApplySettings() {
   WiFiClientSecure client; client.setInsecure(); client.setBufferSizes(4096, 1024);
   HTTPClient http;
   String url = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(getBoardIdentifier());
-  startHttpCall();
-  if (!http.begin(client, url)) { endHttpCall(); return; }
+  if (!http.begin(client, url)) { return; }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
-  int sc = http.GET(); endHttpCall();
+  int sc = http.GET();
   if (sc != 200) { http.end(); Serial.println("fetchSettings HTTP: " + String(sc)); return; }
   String payload = http.getString(); http.end();
   Serial.println("fetchSettings payload: " + payload);
@@ -816,11 +812,10 @@ void checkForOTAUpdate() {
 
   WiFiClientSecure client; client.setInsecure(); client.setBufferSizes(16384, 512);
   HTTPClient http;
-  startHttpCall();
-  if (!http.begin(client, otaVersionUrl)) { endHttpCall(); return; }
+  if (!http.begin(client, otaVersionUrl)) { return; }
   int code = http.GET();
   String latest = (code == 200) ? http.getString() : "";
-  endHttpCall(); http.end();
+  http.end();
   if (code != 200) return;
   latest.trim();
   Serial.printf("OTA: current=%s latest=%s\n", FIRMWARE_VERSION, latest.c_str());
@@ -833,9 +828,7 @@ void checkForOTAUpdate() {
   display.setCursor(10, 45); display.println("Downloading..."); display.display();
 
   client.stop();
-  startHttpCall();
   t_httpUpdate_return ret = ESPhttpUpdate.update(client, otaBinUrl);
-  endHttpCall();
   if (ret == HTTP_UPDATE_FAILED) {
     display.clearDisplay(); display.setTextSize(1); display.setTextColor(WHITE);
     display.setCursor(10, 20); display.println("OTA FAILED!");
@@ -848,6 +841,7 @@ void checkForOTAUpdate() {
 void setup() {
   Serial.begin(115200);
   pinMode(0, INPUT_PULLUP);
+  startWdtFeed();
   WiFi.setAutoConnect(true); WiFi.setAutoReconnect(true);
 
   if (LittleFS.begin()) {
