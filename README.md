@@ -8,14 +8,10 @@
 
 ```
 tempbot/
-├── PShome01_DHT22/                   # บ้าน (DHT22)
-├── Farm02_DHT22/                     # ฟาร์ม #2 (DHT22 — เหมือน PShome01)
-├── template_DHT22/                   # Template DHT22 (ต้นแบบ)
-├── Farm01_DS18B20/                   # ฟาร์ม #1 (DS18B20)
-├── Farm03_DS18B20/                   # ฟาร์ม #3 (DS18B20)
-├── Farm04_DS18B20/                   # ฟาร์ม #4 (DS18B20)
-├── template_DS18B20/                 # Template DS18B20 (ต้นแบบ)
-├── template_ESP32/                   # Template สำหรับ ESP32
+├── TempBot/                          # Unified firmware (DS18B20 / DHT22 via build flag)
+│   ├── TempBot.ino
+│   └── Makefile                      # make dht22 / ds18b20 / flash_*
+├── PShome01_DHT22/                   # บ้าน (DHT22) — ก่อน unify
 ├── google_apps_script/
 │   └── Code.gs                       # Google Apps Script (+ IoTcenter + LINE Bot)
 ├── libraries/
@@ -29,19 +25,22 @@ tempbot/
 │   ├── DallasTemperature/            # DS18B20
 │   ├── DHT_sensor_library/           # DHT22
 │   └── Adafruit_Unified_Sensor/      # DHT22
+├── test/                             # Unit tests (host-side C++)
 └── releases/
-    └── v1.0.0/                       # firmware .bin (Compiled)
+    └── latest/                       # firmware .bin (DHT22 + DS18B20)
+        ├── DHT22/
+        └── DS18B20/
 ```
 
 ---
 
 ## 🔧 Hardware
 
-| ชิ้นส่วน | ESP8266 | ESP32 |
-|---------|---------|-------|
-| บอร์ด | NodeMCU / Wemos D1 Mini | ESP32 Dev Module |
-| จอ OLED | SSD1306 128×64 (I2C, addr 0x3C) | SSD1306 128×64 (I2C, addr 0x3D) |
-| เซนเซอร์ | DS18B20 หรือ DHT22 | DS18B20 |
+| ชิ้นส่วน | ค่า |
+|---------|------|
+| บอร์ด | NodeMCU / Wemos D1 Mini (ESP8266) |
+| จอ OLED | SSD1306 128×64 (I2C, addr 0x3C) |
+| เซนเซอร์ | DS18B20 หรือ DHT22 |
 
 ```
 ESP8266 Pinout:
@@ -49,11 +48,6 @@ ESP8266 Pinout:
   D2 (GPIO 4) → OLED SDA
   D4 (GPIO 2) → DHT22 DATA
   D5 (GPIO14) → DS18B20 DATA
-
-ESP32 Pinout:
-  D22        → OLED SCL
-  D21        → OLED SDA
-  D14        → DS18B20 DATA
 ```
 
 ---
@@ -77,38 +71,42 @@ ESP32 Pinout:
 
 ## ⚙️ Features
 
-| Feature | ESP8266 | ESP32 |
-|---------|---------|-------|
-| DS18B20 / DHT22 | ✅ | ✅ DS18B20 |
-| OLED Display | ✅ | ✅ |
-| Multi-Bitmap Animation (cat/chicken/fish/tree) | ✅ | ❌ (single bitmap) |
-| WiFiManager + Config Portal | ✅ | ✅ |
-| Web Config UI (`http://<ip>/`) | ✅ | ✅ |
-| Google Sheets Sync | ✅ | ✅ |
-| LINE Notify Alert | ✅ | ✅ |
-| Offline Buffer (LittleFS queue) | ✅ | ✅ |
-| OTA Update | ✅ | ✅ |
-| Boot LINE Notification + Reset Reason | ✅ | ✅ |
-| Factory Reset (Flash btn 5s) | ✅ | ✅ |
-| Temperature Calibration Offset | ✅ | ✅ |
-| Temp threshold sync from GAS | ✅ | ✅ |
-| Static IP | ✅ | ❌ |
-| IoTcenter Integration | ผ่าน GAS | ผ่าน GAS |
+| Feature | รองรับ |
+|---------|------|
+| DS18B20 / DHT22 | ✅ |
+| OLED Display | ✅ |
+| Multi-Bitmap Animation (cat/chicken/fish/tree) | ✅ |
+| WiFiManager + Config Portal | ✅ |
+| Web Config UI (`http://<ip>/`) | ✅ |
+| Google Sheets Sync | ✅ |
+| LINE Notify Alert | ✅ |
+| Offline Buffer (LittleFS queue) | ✅ |
+| OTA Update | ✅ |
+| Boot LINE Notification + Reset Reason | ✅ |
+| Factory Reset (Flash btn 5s) | ✅ |
+| Temperature Calibration Offset | ✅ |
+| Temp threshold sync from GAS | ✅ |
+| Static IP | ✅ |
+| IoTcenter Integration | ผ่าน GAS |
 
 ---
 
 ## 🚀 Compile
 
-### ESP8266
+ใช้โค้ดรวม `TempBot/TempBot.ino` — เลือก sensor ด้วย build flag
+
+### ESP8266 (DHT22 / DS18B20)
 ```bash
-arduino-cli compile --fqbn esp8266:esp8266:nodemcu PShome01_DHT22
-# หรือ
-arduino-cli compile --fqbn esp8266:esp8266:nodemcu Farm03_DS18B20
+cd TempBot
+make ds18b20    # build → releases/latest/DS18B20/firmware.bin
+make dht22      # build → releases/latest/DHT22/firmware.bin
+make flash_ds18b20  PORT=/dev/cu.wchusbserial1110
 ```
 
-### ESP32 (ต้องใช้ huge_app partition)
+หรือเรียก `arduino-cli` ตรง ๆ:
 ```bash
-arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" template_ESP32
+arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 \
+  --build-property "build.extra_flags=-DSENSOR_DS18B20" TempBot
 ```
 
 ---

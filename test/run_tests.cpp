@@ -121,7 +121,7 @@ bool shouldSendBootNotification(String resetReason) {
 }
 
 // ----- alertState logic -----
-// ตัวอย่าง temp alert state machine (simplified จาก loop ของ Farm02)
+// ตัวอย่าง temp alert state machine (DHT22 variant)
 enum AlertState { STATE_NORMAL, STATE_ALERT_LOW, STATE_ALERT_HIGH };
 AlertState evalTempAlertState(float temp, float minAlert, float maxAlert) {
     if(temp < minAlert) return STATE_ALERT_LOW;
@@ -180,7 +180,7 @@ void test_urlEncode() {
     SECTION("urlEncode  (ป้องกัน URL injection ใน GET request ไปหา GAS)");
 
     // safe chars ไม่ encode
-    TEST("alphanumeric unchanged",     urlEncode("Farm02ABC123") == "Farm02ABC123");
+    TEST("alphanumeric unchanged",     urlEncode("DS18B20_ABC123") == "DS18B20_ABC123");
     TEST("hyphen safe",                urlEncode("farm-02")      == "farm-02");
     TEST("dot safe",                   urlEncode("1.0.9")        == "1.0.9");
     TEST("underscore safe",            urlEncode("board_id")     == "board_id");
@@ -281,7 +281,7 @@ void test_bootNotificationFilter() {
 }
 
 void test_alertStateLogic() {
-    SECTION("Temperature Alert State  (logic เดิมใน Farm02 loop)");
+    SECTION("Temperature Alert State  (logic ใน unified loop)");
 
     // config ทั่วไป: min=20.0, max=35.0
     TEST("temp ปกติ → NORMAL",          evalTempAlertState(28.0f, 20.0f, 35.0f) == STATE_NORMAL);
@@ -300,15 +300,15 @@ void test_alertStateLogic() {
 void test_configFileSizes() {
     SECTION("Config File Size Thresholds  (ตรวจ binary compat ของ saveConfig/loadConfig)");
 
-    // Farm02 DHT22 saveConfig fields
-    int farm02 = 150+10+200+10+10+40+32+20+16+10+10+32+150+150+10; // = 850
-    TEST("Farm02 config size = 850",    farm02 == 850);
-    TEST("Farm02 ≥ 550 (latest branch)", farm02 >= 550);
+    // DHT22 (SENSOR_DHT22) saveConfig fields
+    int dht22 = 150+10+200+10+10+40+32+20+16+10+10+32+150+150+10; // = 850
+    TEST("DHT22 config size = 850",    dht22 == 850);
+    TEST("DHT22 ≥ 550 (latest branch)", dht22 >= 550);
 
-    // Farm03 DS18B20 saveConfig fields (ไม่มี minHumidAlert, maxHumidAlert)
-    int farm03 = 150+10+200+10+10+40+32+20+16+32+150+150+10; // = 830
-    TEST("Farm03 config size = 830",    farm03 == 830);
-    TEST("Farm03 ≥ 550 (latest branch)", farm03 >= 550);
+    // DS18B20 (SENSOR_DS18B20) saveConfig fields (ไม่มี minHumidAlert, maxHumidAlert)
+    int ds18b20 = 150+10+200+10+10+40+32+20+16+32+150+150+10; // = 830
+    TEST("DS18B20 config size = 830",    ds18b20 == 830);
+    TEST("DS18B20 ≥ 550 (latest branch)", ds18b20 >= 550);
 
     // ตรวจ boundary ของ legacy branches
     // branch 472: webAppUrl+timerDelay = 160, lineToken+minT+maxT+groupId+boardName+humid*2 = 312 → 472
@@ -323,9 +323,9 @@ void test_configFileSizes() {
     int legacy420 = 150+10+200+10+10+40; // 420
     TEST("legacy 420 boundary correct", legacy420 == 420);
 
-    // ทั้ง farm02 farm03 ต้องไม่ตกไป branch เก่า
-    TEST("Farm02 ไม่ตก branch 472",     farm02 > 472);
-    TEST("Farm03 ไม่ตก branch 472",     farm03 > 472);
+    // ทั้ง DHT22 และ DS18B20 ต้องไม่ตกไป branch เก่า
+    TEST("DHT22 ไม่ตก branch 472",     dht22 > 472);
+    TEST("DS18B20 ไม่ตก branch 472",   ds18b20 > 472);
 }
 
 // ============================================================

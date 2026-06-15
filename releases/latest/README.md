@@ -22,16 +22,15 @@ bin แยกตาม **ชนิดเซนเซอร์** (config อย�
 
 ## วิธีออกเวอร์ชันใหม่ (rollout ทุกบอร์ดในขั้นตอนเดียว)
 ```bash
-# 1. แก้โค้ด + bump FIRMWARE_VERSION (เช่น 1.0.5 -> 1.0.6) ในทุก .ino
-# 2. build bin canonical 2 ชนิด
-for t in DS18B20 DHT22; do
-  src=template_$t
-  arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 --libraries ./libraries \
-    --output-dir /tmp/b_$t $src/$src.ino
-  cp /tmp/b_$t/$src.ino.bin releases/latest/$t/firmware.bin
-  echo 1.0.6 > releases/latest/$t/version.txt   # <- เลขใหม่
-done
-# 3. push เข้า master — ทุกบอร์ดจะเช็ค (ตอนบูต + ทุก 12 ชม.) เห็นใหม่กว่า แล้วอัปเอง
+# 1. แก้โค้ด + bump FIRMWARE_VERSION (เช่น 1.0.5 -> 1.0.6) ใน TempBot/TempBot.ino
+# 2. build bin canonical 2 ชนิด ด้วย Makefile
+cd TempBot
+make ds18b20    # → ../releases/latest/DS18B20/firmware.bin
+make dht22      # → ../releases/latest/DHT22/firmware.bin
+# 3. bump version.txt ทั้งสองโฟลเดอร์
+echo 1.0.6 > ../releases/latest/DS18B20/version.txt
+echo 1.0.6 > ../releases/latest/DHT22/version.txt
+# 4. push เข้า master — ทุกบอร์ดจะเช็ค (ตอนบูต + ทุก 12 ชม.) เห็นใหม่กว่า แล้วอัปเอง
 git add -f releases/latest && git commit -m "release 1.0.6" && git push origin master
 ```
 

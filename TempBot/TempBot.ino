@@ -26,7 +26,7 @@
 #include <tempbot_common.h>
 #include <ArduinoJson.h>
 
-#define FIRMWARE_VERSION "1.0.19"
+#define FIRMWARE_VERSION "1.0.20"
 
 // Feed Hardware WDT every 1s during blocking HTTP calls via Ticker interrupt
 static Ticker _httpWdtTicker;
@@ -168,7 +168,7 @@ void loadConfig() {
     f.readBytes(otaBinUrl,          sizeof(otaBinUrl));
     f.readBytes(tempCalibrationStr, sizeof(tempCalibrationStr));
   } else if (sz >= 820) {
-    // Farm03 old format (830 bytes): no humidity fields
+    // Legacy DS18B20 format (830 bytes): no humidity fields
     f.readBytes(lineToken,          sizeof(lineToken));
     f.readBytes(minTempAlert,       sizeof(minTempAlert));
     f.readBytes(maxTempAlert,       sizeof(maxTempAlert));
@@ -183,7 +183,7 @@ void loadConfig() {
     strcpy(minHumidAlert, "30.0");
     strcpy(maxHumidAlert, "80.0");
   } else if (sz >= 550) {
-    // Farm02 older format (has humidity but older field order)
+    // Legacy DHT22 format (has humidity but older field order)
     f.readBytes(lineToken,     sizeof(lineToken));
     f.readBytes(minTempAlert,  sizeof(minTempAlert));
     f.readBytes(maxTempAlert,  sizeof(maxTempAlert));
@@ -225,6 +225,7 @@ void loadConfig() {
   }
   f.close();
   Serial.printf("Config loaded (%d bytes): URL=%s delay=%s\n", (int)sz, webAppUrl, timerDelayStr);
+  Serial.printf("Calibration: '%s' -> offset=%f\n", tempCalibrationStr, getTempCalibrationOffset());
 }
 
 // --- Daily min/max ---
@@ -619,7 +620,11 @@ bool readSensorData() {
 #ifdef SENSOR_DHT22
   float t = dht.readTemperature();
   float h = dht.readHumidity();
-  if (!isnan(t)) t += getTempCalibrationOffset();
+  if (!isnan(t)) {
+    float off = getTempCalibrationOffset();
+    Serial.printf("[sensor] raw=%.2f offset=%+.2f -> calibrated=%.2f\n", t, off, t + off);
+    t += off;
+  }
   if (isnan(t) || isnan(h)) {
     currentStatus = "SENS ERR"; failedSyncCount++;
     if (millis() - lastSensorErrorNotifyTime >= 3600000UL) {
@@ -1037,7 +1042,11 @@ void loop() {
   if (now - lastUpdate >= 2000) {
 #ifdef SENSOR_DHT22
     float t = dht.readTemperature(), h = dht.readHumidity();
-    if (!isnan(t)) t += getTempCalibrationOffset();
+    if (!isnan(t)) {
+      float off = getTempCalibrationOffset();
+      Serial.printf("[loop] raw=%.2f offset=%+.2f -> cal=%.2f\n", t, off, t + off);
+      t += off;
+    }
     if (isnan(t) || isnan(h)) { currentTemp = -999; currentHumid = -999; }
     else { currentTemp = t; currentHumid = h; }
     if (WiFi.status() == WL_CONNECTED && (currentStatus == "RECONNECTING" || currentStatus == "SENS ERR"))

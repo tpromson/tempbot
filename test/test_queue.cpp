@@ -150,7 +150,7 @@ int getQueueSize() {
     return count;
 }
 
-// Farm03 DS18B20 variant (temp only)
+// DS18B20 variant (temp only)
 void queueData_DS18B20(float temp) {
     int size = getQueueSize();
     if (size >= MAX_QUEUE_ENTRIES) {
@@ -181,7 +181,7 @@ void queueData_DS18B20(float temp) {
     }
 }
 
-// Farm02 DHT22 variant (temp + humid)
+// DHT22 variant (temp + humid)
 void queueData_DHT22(float temp, float humid) {
     int size = getQueueSize();
     if (size >= MAX_QUEUE_ENTRIES) {
@@ -222,7 +222,7 @@ QueueEntry03 parseEntry03(String line) {
     QueueEntry03 e{"","",false};
     int c1 = line.indexOf(',');
     if (c1 < 0) return e;
-    // Farm03 format: timestamp,temp[,ignored]  (first field always timestamp)
+    // DS18B20 format: timestamp,temp[,ignored]  (first field always timestamp)
     e.valid     = true;
     e.timestamp = line.substring(0, c1);
     int c2      = line.indexOf(',', c1+1);
@@ -298,7 +298,7 @@ void test_getQueueSize() {
 }
 
 void test_queueData_DS18B20() {
-    SECTION("queueData  DS18B20 (Farm03 — temp only)");
+    SECTION("queueData  DS18B20 (temp only)");
     lfs_reset();
     _mock_time = 1700000100;
 
@@ -317,7 +317,7 @@ void test_queueData_DS18B20() {
 }
 
 void test_queueData_DHT22() {
-    SECTION("queueData  DHT22 (Farm02 — temp + humid)");
+    SECTION("queueData  DHT22 (temp + humid)");
     lfs_reset();
     _mock_time = 1700000100;
 
