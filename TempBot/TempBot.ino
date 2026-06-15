@@ -26,7 +26,7 @@
 #include <tempbot_common.h>
 #include <ArduinoJson.h>
 
-#define FIRMWARE_VERSION "1.0.21"
+#define FIRMWARE_VERSION "1.0.22"
 
 // Permanent Hardware WDT feed via Ticker (1Hz). Prevents HWDT reset during
 // non-HTTP blocking work (sensor reads, animation, I2C, etc.) since ESP8266
@@ -45,6 +45,7 @@ static void startWdtFeed() { _wdtTicker.attach_ms(1000, _wdtFeed); }
 #define FRAME_COUNT 25
 #define QUEUE_FILE   "/queue.csv"
 #define DROPPED_FILE "/dropped.txt"
+#define OTA_NOTIFY_FILE "/ota_notify.txt"
 #define MAX_QUEUE_ENTRIES 1440
 
 // --- Sensor objects ---
@@ -122,6 +123,22 @@ int loadDroppedCount() {
 void saveDroppedCount(int count) {
   File f = LittleFS.open(DROPPED_FILE, "w");
   if (f) { f.println(String(count)); f.close(); }
+}
+
+// --- OTA notify dedup (per version pair) ---
+String loadLastOtaNotify() {
+  if (!LittleFS.exists(OTA_NOTIFY_FILE)) return "";
+  File f = LittleFS.open(OTA_NOTIFY_FILE, "r");
+  if (!f) return "";
+  String s = f.readStringUntil('\n');
+  f.close();
+  s.trim();
+  return s;
+}
+
+void saveLastOtaNotify(const String& pair) {
+  File f = LittleFS.open(OTA_NOTIFY_FILE, "w");
+  if (f) { f.println(pair); f.close(); }
 }
 
 // --- Config save/load ---
@@ -822,6 +839,14 @@ void checkForOTAUpdate() {
 
   if (!isNewerVersion(latest, String(FIRMWARE_VERSION))) { Serial.println("Up to date."); return; }
 
+  String pair = String(FIRMWARE_VERSION) + "->" + latest;
+  if (loadLastOtaNotify() != pair) {
+    saveLastOtaNotify(pair);
+    notifyViaGAS("🆕 [OTA] New firmware available\nBoard: " + getBoardIdentifier() +
+                 "\nCurrent: v" + String(FIRMWARE_VERSION) +
+                 "\nLatest:  v" + latest);
+  }
+
   display.clearDisplay(); display.setTextSize(1); display.setTextColor(WHITE);
   display.setCursor(10, 10); display.println("OTA UPDATE");
   display.setCursor(10, 25); display.print("v"); display.print(FIRMWARE_VERSION); display.print(" -> v"); display.println(latest);
@@ -834,6 +859,12 @@ void checkForOTAUpdate() {
     display.setCursor(10, 20); display.println("OTA FAILED!");
     display.setCursor(10, 35); display.println(ESPhttpUpdate.getLastErrorString().c_str());
     display.display(); delay(3000);
+    notifyViaGAS("❌ [OTA] Update FAILED\nBoard: " + getBoardIdentifier() +
+                 "\nTried: v" + String(FIRMWARE_VERSION) + " -> v" + latest +
+                 "\nError: " + ESPhttpUpdate.getLastErrorString());
+  } else if (ret == HTTP_UPDATE_OK) {
+    notifyViaGAS("✅ [OTA] Update SUCCESS\nBoard: " + getBoardIdentifier() +
+                 "\nv" + String(FIRMWARE_VERSION) + " -> v" + latest + "\nRebooting...");
   }
 }
 
