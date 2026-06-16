@@ -97,7 +97,7 @@ var IoTcenter = (function() {
       }
 
       if ((status >= 500 || status === 429) && retries < 2) {
-        Utilities.sleep(2000 * (retries + 1));
+        Utilities.sleep(500 * (retries + 1));
         return _callApi(path, payload, retries + 1);
       }
 
@@ -106,7 +106,7 @@ var IoTcenter = (function() {
     } catch (e) {
       if (retries < 2) {
         Logger.log('[IoTcenter] Retry ' + (retries + 1) + '/2: ' + e.toString());
-        Utilities.sleep(2000 * (retries + 1));
+        Utilities.sleep(500 * (retries + 1));
         return _callApi(path, payload, retries + 1);
       }
       Logger.log('[IoTcenter] Connection error: ' + e.toString());
@@ -286,13 +286,6 @@ function doGet(e) {
     if (MAX_ROWS > 0) trimOldRows(sheet);
 
     checkAndNotify(cleanBoardId, tempVal, humidVal);
-
-    var iotPayload = { temperature: tempVal };
-    if (humidVal > 0) iotPayload.humidity = humidVal;
-    sendToIoTcenter(cleanBoardId, 'TEMP_NORMAL', 'info',
-      tempVal.toFixed(1) + '°C' + (humidVal > 0 ? ' / ' + humidVal.toFixed(1) + '%' : ''),
-      iotPayload
-    );
 
     return respond("OK");
 
@@ -834,10 +827,11 @@ function checkAndNotify(boardId, temp, humid) {
   var lastTempStateKey = "LAST_TEMP_STATE_" + boardId;
   var lastHumidStateKey = "LAST_HUMID_STATE_" + boardId;
 
-  var lastState = props.getProperty(lastStateKey) || "NORMAL";
-  var lastNotifyTime = parseInt(props.getProperty(lastTimeKey) || "0");
-  var lastTempState = props.getProperty(lastTempStateKey) || "NORMAL";
-  var lastHumidState = props.getProperty(lastHumidStateKey) || "NORMAL";
+  var allProps = props.getProperties();
+  var lastState = allProps[lastStateKey] || "NORMAL";
+  var lastNotifyTime = parseInt(allProps[lastTimeKey] || "0");
+  var lastTempState = allProps[lastTempStateKey] || "NORMAL";
+  var lastHumidState = allProps[lastHumidStateKey] || "NORMAL";
 
   var newTempState = "NORMAL";
   if (temp <= minT && temp > -50) {
@@ -883,9 +877,14 @@ function checkAndNotify(boardId, temp, humid) {
     else if (newState !== "NORMAL" && (now - lastNotifyTime) >= ALERT_COOLDOWN_MS) shouldSend = true;
   }
 
+  var propUpdates = {};
+  propUpdates[lastStateKey] = newState;
+  propUpdates[lastTempStateKey] = newTempState;
+  propUpdates[lastHumidStateKey] = newHumidState;
+
   if (shouldSend && messages.length > 0) {
-    var targetId = props.getProperty("LINE_TARGET_ID");
-    var token = props.getProperty("LINE_TOKEN");
+    var targetId = allProps["LINE_TARGET_ID"];
+    var token = allProps["LINE_TOKEN"];
     if (targetId && token) {
       for (var i = 0; i < messages.length; i++) {
         var opt = {
@@ -897,7 +896,7 @@ function checkAndNotify(boardId, temp, humid) {
         try { UrlFetchApp.fetch(LINE_PUSH_URL, opt); } catch (e) {}
         Utilities.sleep(500);
       }
-      props.setProperty(lastTimeKey, now.toString());
+      propUpdates[lastTimeKey] = now.toString();
     }
   }
 
@@ -920,9 +919,7 @@ function checkAndNotify(boardId, temp, humid) {
     }
   }
 
-  props.setProperty(lastStateKey, newState);
-  props.setProperty(lastTempStateKey, newTempState);
-  props.setProperty(lastHumidStateKey, newHumidState);
+  props.setProperties(propUpdates);
 }
 
 // ============================================================
