@@ -584,8 +584,10 @@ void flushQueue() {
       HTTPClient http; bool ok = false;
       if (http.begin(client, url)) {
         http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
+        ESP.wdtDisable();
         int code = http.GET();
         String body = (code == 200) ? http.getString() : "";
+        ESP.wdtEnable(8000);
         ok = (code == 200 && body.startsWith("OK"));
         if (!ok) Serial.println("Flush failed: HTTP " + String(code));
         http.end();
@@ -693,8 +695,10 @@ bool syncToGAS(WiFiClientSecure &client) {
 #endif
   if (!http.begin(client, url)) { currentStatus = "ERR HTTP_BEGIN"; return false; }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
+  ESP.wdtDisable();
   int httpCode = http.GET();
   String payload = (httpCode == 200) ? http.getString() : "";
+  ESP.wdtEnable(8000);
   if (httpCode != 200 || !payload.startsWith("OK")) {
     currentStatus = "ERR " + String(httpCode);
     Serial.println("syncToGAS: HTTP " + String(httpCode));
@@ -711,7 +715,9 @@ void fetchAndApplySettings() {
   String url = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(getBoardIdentifier());
   if (!http.begin(client, url)) { return; }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
+  ESP.wdtDisable();
   int sc = http.GET();
+  ESP.wdtEnable(8000);
   if (sc != 200) { http.end(); Serial.println("fetchSettings HTTP: " + String(sc)); return; }
   String payload = http.getString(); http.end();
   Serial.println("fetchSettings payload: " + payload);
@@ -830,8 +836,10 @@ void checkForOTAUpdate() {
   WiFiClientSecure client; client.setInsecure(); client.setBufferSizes(16384, 512);
   HTTPClient http;
   if (!http.begin(client, otaVersionUrl)) { return; }
+  ESP.wdtDisable();
   int code = http.GET();
   String latest = (code == 200) ? http.getString() : "";
+  ESP.wdtEnable(8000);
   http.end();
   if (code != 200) return;
   latest.trim();
@@ -853,7 +861,9 @@ void checkForOTAUpdate() {
   display.setCursor(10, 45); display.println("Downloading..."); display.display();
 
   client.stop();
+  ESP.wdtDisable();
   t_httpUpdate_return ret = ESPhttpUpdate.update(client, otaBinUrl);
+  ESP.wdtEnable(8000);
   if (ret == HTTP_UPDATE_FAILED) {
     display.clearDisplay(); display.setTextSize(1); display.setTextColor(WHITE);
     display.setCursor(10, 20); display.println("OTA FAILED!");
@@ -896,7 +906,7 @@ void setup() {
   Wire.beginTransmission(0x3C);
   if (Wire.endTransmission() == 0) oledAddr = 0x3C;
   else { Wire.beginTransmission(0x3D); if (Wire.endTransmission() == 0) oledAddr = 0x3D; }
-  if (!display.begin(SSD1306_SWITCHCAPVCC, oledAddr)) { Serial.println("SSD1306 failed"); for(;;); }
+  if (!display.begin(SSD1306_SWITCHCAPVCC, oledAddr)) { Serial.println("SSD1306 failed"); ESP.restart(); }
   display.clearDisplay(); playAnimation(1, "BOOTING...");
 
   WiFiManager wm;

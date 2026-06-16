@@ -85,7 +85,9 @@ void sendLineNotify(String message) {
     Serial.print("LINE API Group ID:  "); Serial.println(groupIdStr);
     Serial.print("LINE API Payload:   "); Serial.println(body);
 
+    ESP.wdtDisable();
     int httpCode = http.POST(body);
+    ESP.wdtEnable(8000);
     if (httpCode == 200) {
       Serial.println("LINE API: Message sent successfully.");
     } else {
@@ -113,7 +115,9 @@ void notifyViaGAS(String message) {
   if (http.begin(client, url)) {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.setTimeout(8000);
+    ESP.wdtDisable();
     int code = http.GET();
+    ESP.wdtEnable(8000);
     Serial.print("notifyViaGAS HTTP "); Serial.println(code);
     http.end();
   }
