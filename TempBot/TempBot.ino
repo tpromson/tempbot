@@ -25,8 +25,7 @@
 #include <ESP8266WebServer.h>
 #include <tempbot_common.h>
 #include <ArduinoJson.h>
-
-#define FIRMWARE_VERSION "1.0.22"
+#include "version.h"
 
 // Permanent Hardware WDT feed via Ticker (1Hz). Prevents HWDT reset during
 // non-HTTP blocking work (sensor reads, animation, I2C, etc.) since ESP8266
@@ -57,8 +56,9 @@ DallasTemperature sensors(&oneWire);
 #endif
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// --- Config (unified struct, same layout for all boards = 850 bytes) ---
+// --- Config (850-byte legacy layouts remain readable) ---
 char webAppUrl[150]        = "";
+char apiKey[65]             = "";
 char timerDelayStr[10]     = "10";
 char lineToken[200]        = "";
 char lineGroupId[40]       = "";
@@ -110,142 +110,6 @@ float currentHumid   = -999;
 int8_t shiftX = 0;
 int8_t shiftY = 0;
 
-// --- Dropped count helpers ---
-int loadDroppedCount() {
-  if (!LittleFS.exists(DROPPED_FILE)) return 0;
-  File f = LittleFS.open(DROPPED_FILE, "r");
-  if (!f) return 0;
-  int n = f.readStringUntil('\n').toInt();
-  f.close();
-  return n;
-}
-
-void saveDroppedCount(int count) {
-  File f = LittleFS.open(DROPPED_FILE, "w");
-  if (f) { f.println(String(count)); f.close(); }
-}
-
-// --- OTA notify dedup (per version pair) ---
-String loadLastOtaNotify() {
-  if (!LittleFS.exists(OTA_NOTIFY_FILE)) return "";
-  File f = LittleFS.open(OTA_NOTIFY_FILE, "r");
-  if (!f) return "";
-  String s = f.readStringUntil('\n');
-  f.close();
-  s.trim();
-  return s;
-}
-
-void saveLastOtaNotify(const String& pair) {
-  File f = LittleFS.open(OTA_NOTIFY_FILE, "w");
-  if (f) { f.println(pair); f.close(); }
-}
-
-// --- Config save/load ---
-void saveConfig() {
-  File f = LittleFS.open("/config.bin", "w");
-  if (!f) return;
-  f.write((uint8_t*)webAppUrl,         sizeof(webAppUrl));
-  f.write((uint8_t*)timerDelayStr,     sizeof(timerDelayStr));
-  f.write((uint8_t*)lineToken,         sizeof(lineToken));
-  f.write((uint8_t*)minTempAlert,      sizeof(minTempAlert));
-  f.write((uint8_t*)maxTempAlert,      sizeof(maxTempAlert));
-  f.write((uint8_t*)lineGroupId,       sizeof(lineGroupId));
-  f.write((uint8_t*)boardName,         sizeof(boardName));
-  f.write((uint8_t*)bitmapName,        sizeof(bitmapName));
-  f.write((uint8_t*)staticIP,          sizeof(staticIP));
-  f.write((uint8_t*)minHumidAlert,     sizeof(minHumidAlert));
-  f.write((uint8_t*)maxHumidAlert,     sizeof(maxHumidAlert));
-  f.write((uint8_t*)otaPassword,       sizeof(otaPassword));
-  f.write((uint8_t*)otaVersionUrl,     sizeof(otaVersionUrl));
-  f.write((uint8_t*)otaBinUrl,         sizeof(otaBinUrl));
-  f.write((uint8_t*)tempCalibrationStr,sizeof(tempCalibrationStr));
-  f.close();
-}
-
-void loadConfig() {
-  if (!LittleFS.exists("/config.bin")) return;
-  File f = LittleFS.open("/config.bin", "r");
-  if (!f) return;
-  size_t sz = f.size();
-  f.readBytes(webAppUrl,     sizeof(webAppUrl));
-  f.readBytes(timerDelayStr, sizeof(timerDelayStr));
-  if (sz >= 840) {
-    // unified format (850 bytes): has minHumidAlert/maxHumidAlert between staticIP and otaPassword
-    f.readBytes(lineToken,          sizeof(lineToken));
-    f.readBytes(minTempAlert,       sizeof(minTempAlert));
-    f.readBytes(maxTempAlert,       sizeof(maxTempAlert));
-    f.readBytes(lineGroupId,        sizeof(lineGroupId));
-    f.readBytes(boardName,          sizeof(boardName));
-    f.readBytes(bitmapName,         sizeof(bitmapName));
-    f.readBytes(staticIP,           sizeof(staticIP));
-    f.readBytes(minHumidAlert,      sizeof(minHumidAlert));
-    f.readBytes(maxHumidAlert,      sizeof(maxHumidAlert));
-    f.readBytes(otaPassword,        sizeof(otaPassword));
-    f.readBytes(otaVersionUrl,      sizeof(otaVersionUrl));
-    f.readBytes(otaBinUrl,          sizeof(otaBinUrl));
-    f.readBytes(tempCalibrationStr, sizeof(tempCalibrationStr));
-  } else if (sz >= 820) {
-    // Legacy DS18B20 format (830 bytes): no humidity fields
-    f.readBytes(lineToken,          sizeof(lineToken));
-    f.readBytes(minTempAlert,       sizeof(minTempAlert));
-    f.readBytes(maxTempAlert,       sizeof(maxTempAlert));
-    f.readBytes(lineGroupId,        sizeof(lineGroupId));
-    f.readBytes(boardName,          sizeof(boardName));
-    f.readBytes(bitmapName,         sizeof(bitmapName));
-    f.readBytes(staticIP,           sizeof(staticIP));
-    f.readBytes(otaPassword,        sizeof(otaPassword));
-    f.readBytes(otaVersionUrl,      sizeof(otaVersionUrl));
-    f.readBytes(otaBinUrl,          sizeof(otaBinUrl));
-    f.readBytes(tempCalibrationStr, sizeof(tempCalibrationStr));
-    strcpy(minHumidAlert, "30.0");
-    strcpy(maxHumidAlert, "80.0");
-  } else if (sz >= 550) {
-    // Legacy DHT22 format (has humidity but older field order)
-    f.readBytes(lineToken,     sizeof(lineToken));
-    f.readBytes(minTempAlert,  sizeof(minTempAlert));
-    f.readBytes(maxTempAlert,  sizeof(maxTempAlert));
-    f.readBytes(lineGroupId,   sizeof(lineGroupId));
-    f.readBytes(boardName,     sizeof(boardName));
-    f.readBytes(bitmapName,    sizeof(bitmapName));
-    f.readBytes(staticIP,      sizeof(staticIP));
-    f.readBytes(minHumidAlert, sizeof(minHumidAlert));
-    f.readBytes(maxHumidAlert, sizeof(maxHumidAlert));
-    f.readBytes(otaPassword,   sizeof(otaPassword));
-    f.readBytes(otaVersionUrl, sizeof(otaVersionUrl));
-    f.readBytes(otaBinUrl,     sizeof(otaBinUrl));
-    f.readBytes(tempCalibrationStr, sizeof(tempCalibrationStr));
-  } else if (sz >= 472) {
-    f.readBytes(lineToken,    sizeof(lineToken));
-    f.readBytes(minTempAlert, sizeof(minTempAlert));
-    f.readBytes(maxTempAlert, sizeof(maxTempAlert));
-    f.readBytes(lineGroupId,  sizeof(lineGroupId));
-    f.readBytes(boardName,    sizeof(boardName));
-    strcpy(minHumidAlert, "30.0"); strcpy(maxHumidAlert, "80.0");
-  } else if (sz >= 452) {
-    f.readBytes(lineToken,    sizeof(lineToken));
-    f.readBytes(minTempAlert, sizeof(minTempAlert));
-    f.readBytes(maxTempAlert, sizeof(maxTempAlert));
-    f.readBytes(lineGroupId,  sizeof(lineGroupId));
-    f.readBytes(boardName,    sizeof(boardName));
-    strcpy(minHumidAlert, "30.0"); strcpy(maxHumidAlert, "80.0");
-  } else if (sz >= 420) {
-    f.readBytes(lineToken,    sizeof(lineToken));
-    f.readBytes(minTempAlert, sizeof(minTempAlert));
-    f.readBytes(maxTempAlert, sizeof(maxTempAlert));
-    f.readBytes(lineGroupId,  sizeof(lineGroupId));
-    boardName[0] = '\0';
-    strcpy(minHumidAlert, "30.0"); strcpy(maxHumidAlert, "80.0");
-  } else {
-    lineToken[0] = '\0'; lineGroupId[0] = '\0'; boardName[0] = '\0';
-    strcpy(minTempAlert, "20.0"); strcpy(maxTempAlert, "35.0");
-    strcpy(minHumidAlert, "30.0"); strcpy(maxHumidAlert, "80.0");
-  }
-  f.close();
-  Serial.printf("Config loaded (%d bytes): URL=%s delay=%s\n", (int)sz, webAppUrl, timerDelayStr);
-  Serial.printf("Calibration: '%s' -> offset=%f\n", tempCalibrationStr, getTempCalibrationOffset());
-}
-
 // --- Daily min/max ---
 void updateDailyMinMax(float temp
 #ifdef SENSOR_DHT22
@@ -278,16 +142,17 @@ void updateDailyMinMax(float temp
 const char CONFIG_HTML[] PROGMEM = R"HTML(
 <!DOCTYPE html><html><head><title>TempBot Config</title></head><body>
 <h2>TempBot Configuration</h2>
-<form method='GET' action='/save'>
+<form method='POST' action='/save'>
 <label>WebApp URL:</label><input name='url' value='%s'><br/>
+<label>GAS API Key:</label><input type='password' name='api_key' placeholder='unchanged'><br/>
 <label>Sync Delay (min):</label><input name='delay' value='%s'><br/>
-<label>LINE Token:</label><input name='token' value='%s'><br/>
+<label>LINE Token:</label><input type='password' name='token' placeholder='unchanged'><br/>
 <label>Board Name:</label><input name='board' value='%s'><br/>
 <label>Min Temp (C):</label><input name='min_temp' value='%s'><br/>
 <label>Max Temp (C):</label><input name='max_temp' value='%s'><br/>
 <label>Min Humid (%):</label><input name='min_humid' value='%s'><br/>
 <label>Max Humid (%):</label><input name='max_humid' value='%s'><br/>
-<label>OTA Password:</label><input name='ota_pass' value='%s'><br/>
+<label>OTA Password:</label><input type='password' name='ota_pass' placeholder='unchanged'><br/>
 <label>Static IP:</label><input name='static_ip' value='%s'><br/>
 <hr/><h3>Calibration &amp; OTA</h3>
 <label>Temp Offset (C):</label><input name='temp_cal' value='%s'><br/>
@@ -301,14 +166,15 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 const char CONFIG_HTML[] PROGMEM = R"HTML(
 <!DOCTYPE html><html><head><title>TempBot Config</title></head><body>
 <h2>TempBot Configuration</h2>
-<form method='GET' action='/save'>
+<form method='POST' action='/save'>
 <label>WebApp URL:</label><input name='url' value='%s'><br/>
+<label>GAS API Key:</label><input type='password' name='api_key' placeholder='unchanged'><br/>
 <label>Sync Delay (min):</label><input name='delay' value='%s'><br/>
-<label>LINE Token:</label><input name='token' value='%s'><br/>
+<label>LINE Token:</label><input type='password' name='token' placeholder='unchanged'><br/>
 <label>Board Name:</label><input name='board' value='%s'><br/>
 <label>Min Temp (C):</label><input name='min_temp' value='%s'><br/>
 <label>Max Temp (C):</label><input name='max_temp' value='%s'><br/>
-<label>OTA Password:</label><input name='ota_pass' value='%s'><br/>
+<label>OTA Password:</label><input type='password' name='ota_pass' placeholder='unchanged'><br/>
 <label>Static IP:</label><input name='static_ip' value='%s'><br/>
 <hr/><h3>Calibration &amp; OTA</h3>
 <label>Temp Offset (C):</label><input name='temp_cal' value='%s'><br/>
@@ -320,40 +186,52 @@ const char CONFIG_HTML[] PROGMEM = R"HTML(
 )HTML";
 #endif
 
+bool requireConfigAuth() {
+  // Before an API key is configured, the local UI stays open for first-time
+  // provisioning. Once configured, protect every management endpoint.
+  if (strlen(apiKey) == 0) return true;
+  if (server.authenticate("tempbot", apiKey)) return true;
+  server.requestAuthentication();
+  return false;
+}
+
 void handleRoot() {
+  if (!requireConfigAuth()) return;
   char buf[2048];
 #ifdef SENSOR_DHT22
   snprintf(buf, sizeof(buf), CONFIG_HTML,
-    webAppUrl, timerDelayStr, lineToken, boardName,
+    webAppUrl, timerDelayStr, boardName,
     minTempAlert, maxTempAlert, minHumidAlert, maxHumidAlert,
-    otaPassword, staticIP, tempCalibrationStr, bitmapName,
+    staticIP, tempCalibrationStr, bitmapName,
     otaVersionUrl, otaBinUrl);
 #else
   snprintf(buf, sizeof(buf), CONFIG_HTML,
-    webAppUrl, timerDelayStr, lineToken, boardName,
+    webAppUrl, timerDelayStr, boardName,
     minTempAlert, maxTempAlert,
-    otaPassword, staticIP, tempCalibrationStr, bitmapName,
+    staticIP, tempCalibrationStr, bitmapName,
     otaVersionUrl, otaBinUrl);
 #endif
   server.send(200, "text/html", buf);
 }
 
 void handleSave() {
-  if (server.hasArg("url"))             strncpy(webAppUrl,         server.arg("url").c_str(),             sizeof(webAppUrl)-1);
-  if (server.hasArg("delay"))           strncpy(timerDelayStr,     server.arg("delay").c_str(),           sizeof(timerDelayStr)-1);
-  if (server.hasArg("token"))           strncpy(lineToken,         server.arg("token").c_str(),           sizeof(lineToken)-1);
-  if (server.hasArg("board"))           strncpy(boardName,         server.arg("board").c_str(),           sizeof(boardName)-1);
-  if (server.hasArg("min_temp"))        strncpy(minTempAlert,      server.arg("min_temp").c_str(),        sizeof(minTempAlert)-1);
-  if (server.hasArg("max_temp"))        strncpy(maxTempAlert,      server.arg("max_temp").c_str(),        sizeof(maxTempAlert)-1);
+  if (!requireConfigAuth()) return;
+  if (server.hasArg("url"))             server.arg("url").toCharArray(webAppUrl, sizeof(webAppUrl));
+  if (server.hasArg("delay"))           server.arg("delay").toCharArray(timerDelayStr, sizeof(timerDelayStr));
+  if (server.hasArg("api_key") && server.arg("api_key").length() > 0) server.arg("api_key").toCharArray(apiKey, sizeof(apiKey));
+  if (server.hasArg("token") && server.arg("token").length() > 0)     server.arg("token").toCharArray(lineToken, sizeof(lineToken));
+  if (server.hasArg("board"))           server.arg("board").toCharArray(boardName, sizeof(boardName));
+  if (server.hasArg("min_temp"))        server.arg("min_temp").toCharArray(minTempAlert, sizeof(minTempAlert));
+  if (server.hasArg("max_temp"))        server.arg("max_temp").toCharArray(maxTempAlert, sizeof(maxTempAlert));
 #ifdef SENSOR_DHT22
-  if (server.hasArg("min_humid"))       strncpy(minHumidAlert,     server.arg("min_humid").c_str(),       sizeof(minHumidAlert)-1);
-  if (server.hasArg("max_humid"))       strncpy(maxHumidAlert,     server.arg("max_humid").c_str(),       sizeof(maxHumidAlert)-1);
+  if (server.hasArg("min_humid"))       server.arg("min_humid").toCharArray(minHumidAlert, sizeof(minHumidAlert));
+  if (server.hasArg("max_humid"))       server.arg("max_humid").toCharArray(maxHumidAlert, sizeof(maxHumidAlert));
 #endif
-  if (server.hasArg("ota_pass"))        strncpy(otaPassword,       server.arg("ota_pass").c_str(),        sizeof(otaPassword)-1);
-  if (server.hasArg("static_ip"))       strncpy(staticIP,          server.arg("static_ip").c_str(),       sizeof(staticIP)-1);
-  if (server.hasArg("ota_version_url")) strncpy(otaVersionUrl,     server.arg("ota_version_url").c_str(), sizeof(otaVersionUrl)-1);
-  if (server.hasArg("ota_bin_url"))     strncpy(otaBinUrl,         server.arg("ota_bin_url").c_str(),     sizeof(otaBinUrl)-1);
-  if (server.hasArg("temp_cal"))        strncpy(tempCalibrationStr,server.arg("temp_cal").c_str(),        sizeof(tempCalibrationStr)-1);
+  if (server.hasArg("ota_pass") && server.arg("ota_pass").length() > 0) server.arg("ota_pass").toCharArray(otaPassword, sizeof(otaPassword));
+  if (server.hasArg("static_ip"))       server.arg("static_ip").toCharArray(staticIP, sizeof(staticIP));
+  if (server.hasArg("ota_version_url")) server.arg("ota_version_url").toCharArray(otaVersionUrl, sizeof(otaVersionUrl));
+  if (server.hasArg("ota_bin_url"))     server.arg("ota_bin_url").toCharArray(otaBinUrl, sizeof(otaBinUrl));
+  if (server.hasArg("temp_cal"))        server.arg("temp_cal").toCharArray(tempCalibrationStr, sizeof(tempCalibrationStr));
   if (server.hasArg("bitmap")) {
     String bmp = server.arg("bitmap"); bmp.trim();
     if (bmp.length() > 0 && bmp.length() < 20) { bmp.toCharArray(bitmapName, 20); setBitmap(bitmapName); }
@@ -365,6 +243,7 @@ void handleSave() {
 }
 
 void handleQueue() {
+  if (!requireConfigAuth()) return;
   if (!LittleFS.exists(QUEUE_FILE)) { server.send(200, "text/plain", "Queue empty."); return; }
   File f = LittleFS.open(QUEUE_FILE, "r");
   if (!f) { server.send(500, "text/plain", "Failed to open queue."); return; }
@@ -484,150 +363,6 @@ void updateDisplay(float temp, String status) {
   display.display();
 }
 
-// --- Offline queue ---
-int getQueueSize() {
-  if (!LittleFS.exists(QUEUE_FILE)) return 0;
-  File f = LittleFS.open(QUEUE_FILE, "r");
-  if (!f) return 0;
-  int count = 0;
-  while (f.available()) {
-    ESP.wdtFeed();
-    String line = f.readStringUntil('\n'); line.trim();
-    if (line.length() > 2) count++;
-  }
-  f.close();
-  return count;
-}
-
-#ifdef SENSOR_DHT22
-void queueData(float temp, float humid) {
-#else
-void queueData(float temp) {
-#endif
-  int size = getQueueSize();
-  if (size >= MAX_QUEUE_ENTRIES) {
-    droppedEntries++; saveDroppedCount(droppedEntries);
-    Serial.println("Queue full! Removing oldest entry...");
-    File src = LittleFS.open(QUEUE_FILE, "r");
-    File dst = LittleFS.open("/qtmp.csv", "w");
-    if (src && dst) {
-      src.readStringUntil('\n'); // skip oldest
-      while (src.available()) {
-        ESP.wdtFeed();
-        String line = src.readStringUntil('\n'); line.trim();
-        if (line.length() > 2) dst.println(line);
-      }
-    }
-    src.close(); dst.close();
-    LittleFS.remove(QUEUE_FILE); LittleFS.rename("/qtmp.csv", QUEUE_FILE);
-    size--;
-  }
-  File f = LittleFS.open(QUEUE_FILE, "a");
-  if (f) {
-    time_t now = time(nullptr);
-    if (now < 1000000000 && lastSyncTimeEpoch >= 1000000000)
-      now = lastSyncTimeEpoch + (millis() - lastSyncTimeMillis) / 1000;
-#ifdef SENSOR_DHT22
-    f.println(String(now) + "," + String(temp,1) + "," + String(humid,1));
-#else
-    f.println(String(now) + "," + String(temp,1));
-#endif
-    f.close();
-    Serial.print("Queued. Size: "); Serial.println(size + 1);
-  }
-}
-
-void flushQueue() {
-  if (strlen(webAppUrl) < 10) return;
-  if (!LittleFS.exists(QUEUE_FILE)) return;
-
-  int entryCount = getQueueSize();
-  if (entryCount == 0) { LittleFS.remove(QUEUE_FILE); return; }
-
-  Serial.print("Flushing "); Serial.print(entryCount); Serial.println(" queued entries...");
-  display.clearDisplay(); display.setTextSize(1); display.setTextColor(WHITE);
-  display.setCursor(5, 10); display.print("SYNCING OFFLINE DATA");
-  display.setCursor(5, 25); display.print(entryCount); display.print(" buffered entries");
-  display.display();
-
-  WiFiClientSecure client; client.setInsecure(); client.setBufferSizes(4096, 1024);
-  String boardID = getBoardIdentifier();
-  int sentCount = 0;
-
-  // Pass 1: stream line-by-line
-  {
-    File f = LittleFS.open(QUEUE_FILE, "r");
-    while (f.available()) {
-      ESP.wdtFeed();
-      if (WiFi.status() != WL_CONNECTED) break;
-      String line = f.readStringUntil('\n'); line.trim();
-      if (line.length() <= 2) continue;
-
-      int c1 = line.indexOf(',');
-      if (c1 < 0) { sentCount++; continue; }
-#ifdef SENSOR_DHT22
-      int c2 = line.indexOf(',', c1+1);
-      String ts = "", t = "", h = "";
-      if (c2 < 0) { t = line.substring(0, c1); h = line.substring(c1+1); }
-      else { ts = line.substring(0, c1); t = line.substring(c1+1, c2); h = line.substring(c2+1); }
-      String url = String(webAppUrl) + "?temperature=" + t + "&humidity=" + h
-                 + "&board_id=" + urlEncode(boardID) + "&queued=1";
-      if (ts.length() > 0 && ts != "0") url += "&timestamp=" + ts;
-#else
-      int c2 = line.indexOf(',', c1+1);
-      String ts = line.substring(0, c1);
-      String t  = (c2 < 0) ? line.substring(c1+1) : line.substring(c1+1, c2);
-      String url = String(webAppUrl) + "?temperature=" + t
-                 + "&board_id=" + urlEncode(boardID) + "&queued=1";
-      if (ts.length() > 0 && ts != "0") url += "&timestamp=" + ts;
-#endif
-      HTTPClient http; bool ok = false;
-      if (http.begin(client, url)) {
-        http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
-        ESP.wdtDisable();
-        int code = http.GET();
-        String body = (code == 200) ? http.getString() : "";
-        ESP.wdtEnable(8000);
-        ok = (code == 200 && body.startsWith("OK"));
-        if (!ok) Serial.println("Flush failed: HTTP " + String(code));
-        http.end();
-      }
-      client.stop();
-      if (ok) {
-        sentCount++;
-        display.fillRect(0, 40, 128, 20, BLACK);
-        display.setCursor(5, 42); display.print("Sent: "); display.print(sentCount);
-        display.print("/"); display.print(entryCount); display.display();
-      } else break;
-      ArduinoOTA.handle(); delay(500); yield();
-    }
-    f.close();
-  }
-
-  if (sentCount > 0) { lastSyncTimeEpoch = time(nullptr); lastSyncTimeMillis = millis(); }
-
-  if (sentCount >= entryCount) { LittleFS.remove(QUEUE_FILE); Serial.println("Queue fully flushed!"); return; }
-
-  // Pass 2: write unsent entries back
-  {
-    File src = LittleFS.open(QUEUE_FILE, "r");
-    File dst = LittleFS.open("/qtmp.csv", "w");
-    if (src && dst) {
-      int lineNum = 0;
-      while (src.available()) {
-        ESP.wdtFeed();
-        String line = src.readStringUntil('\n'); line.trim();
-        if (line.length() <= 2) continue;
-        if (lineNum++ < sentCount) continue;
-        dst.println(line);
-      }
-    }
-    src.close(); dst.close();
-    LittleFS.remove(QUEUE_FILE); LittleFS.rename("/qtmp.csv", QUEUE_FILE);
-    Serial.printf("Partial flush: %d/%d\n", sentCount, entryCount);
-  }
-}
-
 // --- Logic helpers ---
 bool validateWebAppUrl() {
   if (strlen(webAppUrl) < 10) { currentStatus = "NO URL"; return false; }
@@ -693,6 +428,7 @@ bool syncToGAS(WiFiClientSecure &client) {
   String url = String(webAppUrl) + "?temperature=" + String(currentTemp,1)
              + "&board_id=" + urlEncode(getBoardIdentifier());
 #endif
+  url = appendGASAuth(url);
   if (!http.begin(client, url)) { currentStatus = "ERR HTTP_BEGIN"; return false; }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
   ESP.wdtDisable();
@@ -712,7 +448,7 @@ bool syncToGAS(WiFiClientSecure &client) {
 void fetchAndApplySettings() {
   WiFiClientSecure client; client.setInsecure(); client.setBufferSizes(4096, 1024);
   HTTPClient http;
-  String url = String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(getBoardIdentifier());
+  String url = appendGASAuth(String(webAppUrl) + "?get_settings=1&board_id=" + urlEncode(getBoardIdentifier()));
   if (!http.begin(client, url)) { return; }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); http.setTimeout(10000);
   ESP.wdtDisable();
@@ -749,7 +485,17 @@ void sendData() {
     }
     fetchAndApplySettings();
     flushQueue();
-  } else { failedSyncCount++; }
+  } else {
+    // Wi-Fi being connected does not guarantee the delivery succeeded. Keep
+    // the reading so a temporary GAS/DNS/TLS failure cannot silently lose it.
+#ifdef SENSOR_DHT22
+    queueData(currentTemp, currentHumid);
+#else
+    queueData(currentTemp);
+#endif
+    currentStatus = "BUFFERED:" + String(getQueueSize());
+    failedSyncCount++;
+  }
 }
 
 void checkWiFiConnection() {
@@ -773,8 +519,9 @@ void openConfigPortal() {
   WiFiManager wm;
   WiFiManagerParameter p_url("url", "Google WebApp URL", webAppUrl, 150);
   WiFiManagerParameter p_delay("delay", "Sync Delay (Minutes)", timerDelayStr, 10);
-  WiFiManagerParameter p_token("token", "LINE Channel Access Token", lineToken, 200);
+  WiFiManagerParameter p_token("token", "LINE Channel Access Token (leave blank to keep)", "", 200);
   WiFiManagerParameter p_groupid("groupid", "LINE Group ID", lineGroupId, 40);
+  WiFiManagerParameter p_api_key("api_key", "GAS API Key (leave blank to keep)", "", 65);
   WiFiManagerParameter p_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter p_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
 #ifdef SENSOR_DHT22
@@ -782,7 +529,7 @@ void openConfigPortal() {
   WiFiManagerParameter p_max_humid("max_humid", "Max Humid Alert (%)", maxHumidAlert, 10);
 #endif
   WiFiManagerParameter p_board("board_name", "Board Name", boardName, 32);
-  WiFiManagerParameter p_ota_pass("ota_pass", "ArduinoOTA Password", otaPassword, 32);
+  WiFiManagerParameter p_ota_pass("ota_pass", "ArduinoOTA Password (leave blank to keep)", "", 32);
   WiFiManagerParameter p_ota_ver("ota_version_url", "OTA Version URL", otaVersionUrl, 150);
   WiFiManagerParameter p_ota_bin("ota_bin_url", "OTA Firmware URL", otaBinUrl, 150);
   WiFiManagerParameter p_cal("temp_cal", "Temp Calibration Offset (C)", tempCalibrationStr, 10);
@@ -790,7 +537,7 @@ void openConfigPortal() {
   WiFiManagerParameter p_ip("static_ip", "Static IP (empty=DHCP)", staticIP, 16);
 
   wm.addParameter(&p_url); wm.addParameter(&p_delay); wm.addParameter(&p_token);
-  wm.addParameter(&p_groupid); wm.addParameter(&p_min_temp); wm.addParameter(&p_max_temp);
+  wm.addParameter(&p_groupid); wm.addParameter(&p_api_key); wm.addParameter(&p_min_temp); wm.addParameter(&p_max_temp);
 #ifdef SENSOR_DHT22
   wm.addParameter(&p_min_humid); wm.addParameter(&p_max_humid);
 #endif
@@ -802,22 +549,24 @@ void openConfigPortal() {
   String boardID = "ESP8266_" + String(ESP.getChipId(), HEX); boardID.toUpperCase();
   wm.startConfigPortal(boardID.c_str());
 
-  if (p_url.getValue()[0])   strncpy(webAppUrl,    p_url.getValue(),     sizeof(webAppUrl));
-  if (p_delay.getValue()[0]) { strncpy(timerDelayStr, p_delay.getValue(), sizeof(timerDelayStr)); unsigned long m=atol(timerDelayStr); if(m>0) timerDelay=m*60000; }
-  strncpy(lineToken,         p_token.getValue(),    sizeof(lineToken));
-  strncpy(lineGroupId,       p_groupid.getValue(),  sizeof(lineGroupId));
-  strncpy(minTempAlert,      p_min_temp.getValue(), sizeof(minTempAlert));
-  strncpy(maxTempAlert,      p_max_temp.getValue(), sizeof(maxTempAlert));
+  if (p_url.getValue()[0])   String(p_url.getValue()).toCharArray(webAppUrl, sizeof(webAppUrl));
+  if (p_delay.getValue()[0]) { String(p_delay.getValue()).toCharArray(timerDelayStr, sizeof(timerDelayStr)); unsigned long m=atol(timerDelayStr); if(m>0) timerDelay=m*60000; }
+  if (p_token.getValue()[0]) String(p_token.getValue()).toCharArray(lineToken, sizeof(lineToken));
+  String(p_groupid.getValue()).toCharArray(lineGroupId, sizeof(lineGroupId));
+  if (p_api_key.getValue()[0]) String(p_api_key.getValue()).toCharArray(apiKey, sizeof(apiKey));
+  String(p_min_temp.getValue()).toCharArray(minTempAlert, sizeof(minTempAlert));
+  String(p_max_temp.getValue()).toCharArray(maxTempAlert, sizeof(maxTempAlert));
 #ifdef SENSOR_DHT22
-  strncpy(minHumidAlert,     p_min_humid.getValue(),sizeof(minHumidAlert));
-  strncpy(maxHumidAlert,     p_max_humid.getValue(),sizeof(maxHumidAlert));
+  String(p_min_humid.getValue()).toCharArray(minHumidAlert, sizeof(minHumidAlert));
+  String(p_max_humid.getValue()).toCharArray(maxHumidAlert, sizeof(maxHumidAlert));
 #endif
-  strncpy(boardName,         p_board.getValue(),    sizeof(boardName));
-  strncpy(otaPassword,       p_ota_pass.getValue(), sizeof(otaPassword));
-  strncpy(otaVersionUrl,     p_ota_ver.getValue(),  sizeof(otaVersionUrl));
-  strncpy(otaBinUrl,         p_ota_bin.getValue(),  sizeof(otaBinUrl));
-  strncpy(tempCalibrationStr,p_cal.getValue(),      sizeof(tempCalibrationStr));
-  strncpy(bitmapName,        p_bitmap.getValue(),   sizeof(bitmapName));
+  String(p_board.getValue()).toCharArray(boardName, sizeof(boardName));
+  if (p_ota_pass.getValue()[0]) String(p_ota_pass.getValue()).toCharArray(otaPassword, sizeof(otaPassword));
+  String(p_ota_ver.getValue()).toCharArray(otaVersionUrl, sizeof(otaVersionUrl));
+  String(p_ota_bin.getValue()).toCharArray(otaBinUrl, sizeof(otaBinUrl));
+  String(p_cal.getValue()).toCharArray(tempCalibrationStr, sizeof(tempCalibrationStr));
+  String(p_bitmap.getValue()).toCharArray(bitmapName, sizeof(bitmapName));
+  String(p_ip.getValue()).toCharArray(staticIP, sizeof(staticIP));
   if (strlen(bitmapName) > 0) setBitmap(bitmapName);
   saveConfig();
   playAnimation(1, "RESTARTING...");
@@ -912,8 +661,9 @@ void setup() {
   WiFiManager wm;
   WiFiManagerParameter p_url("url", "Google WebApp URL", webAppUrl, 150);
   WiFiManagerParameter p_delay("delay", "Sync Delay (Minutes)", timerDelayStr, 10);
-  WiFiManagerParameter p_token("token", "LINE Channel Access Token", lineToken, 200);
+  WiFiManagerParameter p_token("token", "LINE Channel Access Token (leave blank to keep)", "", 200);
   WiFiManagerParameter p_groupid("groupid", "LINE Group ID", lineGroupId, 40);
+  WiFiManagerParameter p_api_key("api_key", "GAS API Key (leave blank to keep)", "", 65);
   WiFiManagerParameter p_min_temp("min_temp", "Min Temp Alert (C)", minTempAlert, 10);
   WiFiManagerParameter p_max_temp("max_temp", "Max Temp Alert (C)", maxTempAlert, 10);
 #ifdef SENSOR_DHT22
@@ -921,7 +671,7 @@ void setup() {
   WiFiManagerParameter p_max_humid("max_humid", "Max Humid Alert (%)", maxHumidAlert, 10);
 #endif
   WiFiManagerParameter p_board("board_name", "Board Name", boardName, 32);
-  WiFiManagerParameter p_ota_pass("ota_pass", "ArduinoOTA Password", otaPassword, 32);
+  WiFiManagerParameter p_ota_pass("ota_pass", "ArduinoOTA Password (leave blank to keep)", "", 32);
   WiFiManagerParameter p_ota_ver("ota_version_url", "OTA Version URL", otaVersionUrl, 150);
   WiFiManagerParameter p_ota_bin("ota_bin_url", "OTA Firmware URL", otaBinUrl, 150);
   WiFiManagerParameter p_cal("temp_cal", "Temp Calibration Offset (C)", tempCalibrationStr, 10);
@@ -929,7 +679,7 @@ void setup() {
 
   wm.addParameter(&p_ota_ver); wm.addParameter(&p_ota_bin); wm.addParameter(&p_cal);
   wm.addParameter(&p_url); wm.addParameter(&p_delay); wm.addParameter(&p_token);
-  wm.addParameter(&p_groupid); wm.addParameter(&p_min_temp); wm.addParameter(&p_max_temp);
+  wm.addParameter(&p_groupid); wm.addParameter(&p_api_key); wm.addParameter(&p_min_temp); wm.addParameter(&p_max_temp);
 #ifdef SENSOR_DHT22
   wm.addParameter(&p_min_humid); wm.addParameter(&p_max_humid);
 #endif
@@ -947,7 +697,7 @@ void setup() {
   else { playAnimation(1, "WIFI OK!"); currentStatus = "CONNECTED"; }
 
   server.on("/", HTTP_GET, handleRoot);
-  server.on("/save", HTTP_GET, handleSave);
+  server.on("/save", HTTP_POST, handleSave);
   server.on("/queue", HTTP_GET, handleQueue);
   server.begin();
 
@@ -956,21 +706,23 @@ void setup() {
   display.println(WiFi.localIP()); display.print("FW v"); display.println(FIRMWARE_VERSION);
   display.display(); delay(3000); display.clearDisplay();
 
-  if (p_url.getValue()[0])   strncpy(webAppUrl,    p_url.getValue(),     sizeof(webAppUrl));
-  if (p_delay.getValue()[0]) { strncpy(timerDelayStr, p_delay.getValue(), sizeof(timerDelayStr)); unsigned long m=atol(timerDelayStr); if(m>0) timerDelay=m*60000; }
-  strncpy(lineToken,         p_token.getValue(),    sizeof(lineToken));
-  strncpy(lineGroupId,       p_groupid.getValue(),  sizeof(lineGroupId));
-  strncpy(minTempAlert,      p_min_temp.getValue(), sizeof(minTempAlert));
-  strncpy(maxTempAlert,      p_max_temp.getValue(), sizeof(maxTempAlert));
+  if (p_url.getValue()[0])   String(p_url.getValue()).toCharArray(webAppUrl, sizeof(webAppUrl));
+  if (p_delay.getValue()[0]) { String(p_delay.getValue()).toCharArray(timerDelayStr, sizeof(timerDelayStr)); unsigned long m=atol(timerDelayStr); if(m>0) timerDelay=m*60000; }
+  if (p_token.getValue()[0]) String(p_token.getValue()).toCharArray(lineToken, sizeof(lineToken));
+  String(p_groupid.getValue()).toCharArray(lineGroupId, sizeof(lineGroupId));
+  if (p_api_key.getValue()[0]) String(p_api_key.getValue()).toCharArray(apiKey, sizeof(apiKey));
+  String(p_min_temp.getValue()).toCharArray(minTempAlert, sizeof(minTempAlert));
+  String(p_max_temp.getValue()).toCharArray(maxTempAlert, sizeof(maxTempAlert));
 #ifdef SENSOR_DHT22
-  strncpy(minHumidAlert,     p_min_humid.getValue(),sizeof(minHumidAlert));
-  strncpy(maxHumidAlert,     p_max_humid.getValue(),sizeof(maxHumidAlert));
+  String(p_min_humid.getValue()).toCharArray(minHumidAlert, sizeof(minHumidAlert));
+  String(p_max_humid.getValue()).toCharArray(maxHumidAlert, sizeof(maxHumidAlert));
 #endif
-  strncpy(boardName,         p_board.getValue(),    sizeof(boardName));
-  strncpy(otaPassword,       p_ota_pass.getValue(), sizeof(otaPassword));
-  strncpy(otaVersionUrl,     p_ota_ver.getValue(),  sizeof(otaVersionUrl));
-  strncpy(otaBinUrl,         p_ota_bin.getValue(),  sizeof(otaBinUrl));
-  strncpy(tempCalibrationStr,p_cal.getValue(),      sizeof(tempCalibrationStr));
+  String(p_board.getValue()).toCharArray(boardName, sizeof(boardName));
+  if (p_ota_pass.getValue()[0]) String(p_ota_pass.getValue()).toCharArray(otaPassword, sizeof(otaPassword));
+  String(p_ota_ver.getValue()).toCharArray(otaVersionUrl, sizeof(otaVersionUrl));
+  String(p_ota_bin.getValue()).toCharArray(otaBinUrl, sizeof(otaBinUrl));
+  String(p_cal.getValue()).toCharArray(tempCalibrationStr, sizeof(tempCalibrationStr));
+  String(p_ip.getValue()).toCharArray(staticIP, sizeof(staticIP));
   saveConfig();
 
   configTime(7*3600, 0, "pool.ntp.org", "time.nist.gov");

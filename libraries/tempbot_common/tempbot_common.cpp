@@ -1,4 +1,5 @@
 #include "tempbot_common.h"
+#include "tempbot_semver.h"
 
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
@@ -39,6 +40,12 @@ String urlEncode(String str) {
     }
   }
   return encoded;
+}
+
+// ===== appendGASAuth =====
+String appendGASAuth(String url) {
+  if (strlen(apiKey) == 0) return url;
+  return url + "&key=" + urlEncode(String(apiKey));
 }
 
 // ===== getBoardIdentifier =====
@@ -110,8 +117,8 @@ void notifyViaGAS(String message) {
   client.setInsecure();
   client.setBufferSizes(4096, 1024);
   HTTPClient http;
-  String url = String(webAppUrl) + "?notify=" + urlEncode(message)
-             + "&board_id=" + urlEncode(getBoardIdentifier());
+  String url = appendGASAuth(String(webAppUrl) + "?notify=" + urlEncode(message)
+             + "&board_id=" + urlEncode(getBoardIdentifier()));
   if (http.begin(client, url)) {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.setTimeout(8000);
@@ -128,24 +135,6 @@ float getTempCalibrationOffset() {
   return atof(tempCalibrationStr);
 }
 
-// ===== isNewerVersion =====
-static void parseVer(String v, int &a, int &b, int &c) {
-  v.trim();
-  a = b = c = 0;
-  int p1 = v.indexOf('.');
-  if (p1 < 0) { a = v.toInt(); return; }
-  a = v.substring(0, p1).toInt();
-  int p2 = v.indexOf('.', p1 + 1);
-  if (p2 < 0) { b = v.substring(p1 + 1).toInt(); return; }
-  b = v.substring(p1 + 1, p2).toInt();
-  c = v.substring(p2 + 1).toInt();
-}
-
 bool isNewerVersion(String latest, String current) {
-  int la, lb, lc, ca, cb, cc;
-  parseVer(latest, la, lb, lc);
-  parseVer(current, ca, cb, cc);
-  if (la != ca) return la > ca;
-  if (lb != cb) return lb > cb;
-  return lc > cc;
+  return tempbotIsNewerVersion(latest.c_str(), current.c_str());
 }

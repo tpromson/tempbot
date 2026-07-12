@@ -7,6 +7,7 @@
  * ── Script Properties (Extensions → Apps Script → Project Settings) ──
  *   LINE_TOKEN        = LINE Channel Access Token
  *   LINE_TARGET_ID    = LINE Group/Room/User ID (auto-saved เมื่อ bot รับข้อความแรก)
+ *   TEMPBOT_API_KEY   = shared secret (set after configuring every board)
  *   IOTCENTER_API_URL = https://line-fleetbackend-production.up.railway.app
  *   IOTCENTER_API_KEY = (จาก IoTcenter dashboard)
  *   IOTCENTER_DEVICE  = ชื่อ device ใน IoTcenter
@@ -209,8 +210,16 @@ var MIN_PLAUSIBLE_TEMP = -10;
 // ============================================================
 // doGet — รับข้อมูลจาก ESP
 // ============================================================
+function isAuthorized(e) {
+  var expectedKey = PropertiesService.getScriptProperties().getProperty("TEMPBOT_API_KEY");
+  // Leave the key unset while migrating deployed boards; once set, every
+  // device request must include the matching key.
+  return !expectedKey || e.parameter.key === expectedKey;
+}
+
 function doGet(e) {
   try {
+    if (!isAuthorized(e)) return respond("ERROR: Unauthorized");
     var temperature    = e.parameter.temperature;
     var humidity       = e.parameter.humidity;
     var boardId        = e.parameter.board_id;
@@ -700,7 +709,7 @@ function replyToLine(replyToken, messages, retries) {
 function pushMessage(text) {
   var config = getConfig();
   if (!config.token || !config.groupId) {
-    Logger.log("pushMessage: Missing ACCESS_TOKEN or GROUP_ID");
+    Logger.log("pushMessage: Missing LINE_TOKEN or LINE_TARGET_ID");
     return;
   }
   pushToLine(config.groupId, [{ type: "text", text: text }]);
@@ -721,8 +730,9 @@ function getTargetSheet() {
 function getConfig() {
   const props = PropertiesService.getScriptProperties();
   return {
-    token: props.getProperty('ACCESS_TOKEN'),
-    groupId: props.getProperty('GROUP_ID')
+    token: props.getProperty('LINE_TOKEN'),
+    // GROUP_ID remains as a read-only fallback for existing deployments.
+    groupId: props.getProperty('LINE_TARGET_ID') || props.getProperty('GROUP_ID')
   };
 }
 

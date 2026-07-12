@@ -7,6 +7,7 @@
 // ===== Extern Globals =====
 // These must be defined in the main .ino file
 extern char webAppUrl[150];
+extern char apiKey[65];
 extern char lineToken[200];
 extern char lineGroupId[40];
 extern char boardName[32];
@@ -19,6 +20,9 @@ String formatTime(time_t epoch, bool includeSeconds);
 
 // URL-encode a string
 String urlEncode(String str);
+
+// Add the optional shared API key to a Google Apps Script request URL.
+String appendGASAuth(String url);
 
 // Get the board identifier (boardName or "BOARD_<chipid>")
 String getBoardIdentifier();

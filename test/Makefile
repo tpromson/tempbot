@@ -1,9 +1,12 @@
 CXX      = g++
 CXXFLAGS = -std=c++14 -Wall -Wextra -Wno-unused-parameter
 
-all: run_tests test_queue
+all: release_check run_tests test_queue
 	./run_tests
 	./test_queue
+
+release_check:
+	$(MAKE) -C ../TempBot verify_release
 
 run_tests: run_tests.cpp
 	$(CXX) $(CXXFLAGS) run_tests.cpp -o run_tests
@@ -17,4 +20,4 @@ test_queue: test_queue.cpp
 clean:
 	rm -f run_tests test_queue
 
-.PHONY: all queue clean
+.PHONY: all queue clean release_check

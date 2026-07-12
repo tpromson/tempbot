@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <cctype>
+#include "../libraries/tempbot_common/tempbot_semver.h"
 
 // ============================================================
 // Minimal Arduino String stub
@@ -69,24 +70,12 @@ public:
 };
 
 // ============================================================
-// Functions under test  (copied verbatim from source)
+// Functions under test
 // ============================================================
 
 // ----- isNewerVersion (tempbot_common.cpp) -----
-static void parseVer(String v, int &a, int &b, int &c) {
-    v.trim(); a=b=c=0;
-    int p1=v.indexOf('.'); if(p1<0){a=v.toInt();return;}
-    a=v.substring(0,p1).toInt();
-    int p2=v.indexOf('.',p1+1); if(p2<0){b=v.substring(p1+1).toInt();return;}
-    b=v.substring(p1+1,p2).toInt();
-    c=v.substring(p2+1).toInt();
-}
 bool isNewerVersion(String latest, String current) {
-    int la,lb,lc,ca,cb,cc;
-    parseVer(latest,la,lb,lc); parseVer(current,ca,cb,cc);
-    if(la!=ca) return la>ca;
-    if(lb!=cb) return lb>cb;
-    return lc>cc;
+    return tempbotIsNewerVersion(latest.c_str(), current.c_str());
 }
 
 // ----- urlEncode (tempbot_common.cpp) -----
@@ -300,15 +289,13 @@ void test_alertStateLogic() {
 void test_configFileSizes() {
     SECTION("Config File Size Thresholds  (ตรวจ binary compat ของ saveConfig/loadConfig)");
 
-    // DHT22 (SENSOR_DHT22) saveConfig fields
-    int dht22 = 150+10+200+10+10+40+32+20+16+10+10+32+150+150+10; // = 850
-    TEST("DHT22 config size = 850",    dht22 == 850);
-    TEST("DHT22 ≥ 550 (latest branch)", dht22 >= 550);
+    // Current unified layout appends the shared API key after 850-byte legacy layout.
+    int current = 150+65+10+200+10+10+40+32+20+16+10+10+32+150+150+10; // = 915
+    TEST("current config size = 915", current == 915);
+    TEST("current config includes API key", current > 850);
 
-    // DS18B20 (SENSOR_DS18B20) saveConfig fields (ไม่มี minHumidAlert, maxHumidAlert)
-    int ds18b20 = 150+10+200+10+10+40+32+20+16+32+150+150+10; // = 830
-    TEST("DS18B20 config size = 830",    ds18b20 == 830);
-    TEST("DS18B20 ≥ 550 (latest branch)", ds18b20 >= 550);
+    int legacyUnified = 150+10+200+10+10+40+32+20+16+10+10+32+150+150+10; // = 850
+    TEST("legacy unified config size = 850", legacyUnified == 850);
 
     // ตรวจ boundary ของ legacy branches
     // branch 472: webAppUrl+timerDelay = 160, lineToken+minT+maxT+groupId+boardName+humid*2 = 312 → 472
@@ -323,9 +310,8 @@ void test_configFileSizes() {
     int legacy420 = 150+10+200+10+10+40; // 420
     TEST("legacy 420 boundary correct", legacy420 == 420);
 
-    // ทั้ง DHT22 และ DS18B20 ต้องไม่ตกไป branch เก่า
-    TEST("DHT22 ไม่ตก branch 472",     dht22 > 472);
-    TEST("DS18B20 ไม่ตก branch 472",   ds18b20 > 472);
+    TEST("current ไม่ตก branch 472", current > 472);
+    TEST("legacy unified ไม่ตก branch 472", legacyUnified > 472);
 }
 
 // ============================================================

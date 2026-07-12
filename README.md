@@ -1,6 +1,6 @@
-# 🌡️ TempBot — ESP8266/ESP32 Temperature Monitor
+# 🌡️ TempBot — ESP8266 Temperature Monitor
 
-โปรเจกต์ติดตามอุณหภูมิผ่าน **ESP8266 / ESP32** เซนเซอร์ **DS18B20 หรือ DHT22** บันทึกลง **Google Sheets** แจ้งเตือน **LINE** + ส่งข้อมูลไป **IoTcenter** — รองรับ Offline Buffer, OTA Update, Multi-Bitmap Animation, Web Config UI
+โปรเจกต์ติดตามอุณหภูมิผ่าน **ESP8266** เซนเซอร์ **DS18B20 หรือ DHT22** บันทึกลง **Google Sheets** แจ้งเตือน **LINE** + ส่งข้อมูลไป **IoTcenter** — รองรับ Offline Buffer, OTA Update, Multi-Bitmap Animation, Web Config UI
 
 ---
 
@@ -118,6 +118,7 @@ arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 \
 | Field | สำหรับ |
 |-------|--------|
 | WebApp URL | URL ที่ Deploy จาก Code.gs |
+| GAS API Key | shared secret ระหว่างบอร์ดกับ GAS (แนะนำให้ตั้ง) |
 | Sync Delay (min) | ความถี่ส่งข้อมูล |
 | LINE Token | Channel Access Token |
 | Board Name | ชื่อบอร์ด |
@@ -136,10 +137,19 @@ arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 \
 3. **File → Project Properties → Script Properties** → เพิ่ม:
    - `LINE_TOKEN` = Channel Access Token
    - `IOTCENTER_API_KEY` = (ถ้าใช้ IoTcenter)
+   - `TEMPBOT_API_KEY` = shared secret แบบสุ่มยาวอย่างน้อย 32 ตัวอักษร
 4. **Deploy → New deployment → Web app**
    - Execute as: **Me**
    - Access: **Anyone**
 5. เอา Web App URL ไปใส่ใน Config UI ของบอร์ด
+
+### เปิดใช้ API Key อย่างปลอดภัย
+
+1. อัปเดต firmware ก่อน โดยยังไม่ตั้ง `TEMPBOT_API_KEY` ใน GAS
+2. ตั้งค่า **GAS API Key** เดียวกันบนบอร์ดทุกตัวผ่าน Config UI หรือ Config Portal
+3. ตั้ง Script Property `TEMPBOT_API_KEY` เป็นค่านั้น แล้ว deploy GAS เวอร์ชันใหม่
+
+หลังตั้ง API key แล้ว หน้า Config และ `/queue` จะต้องใช้ HTTP Basic Auth: username `tempbot`, password คือ API key นั้น
 
 ---
 
