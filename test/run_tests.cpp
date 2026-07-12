@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cctype>
 #include "../libraries/tempbot_common/tempbot_semver.h"
+#include "../libraries/tempbot_common/tempbot_sensor_state.h"
+#include "../TempBot/version.h"
 
 // ============================================================
 // Minimal Arduino String stub
@@ -94,8 +96,8 @@ String urlEncode(String str) {
 String formatTime(time_t epoch, bool includeSeconds) {
     if(epoch<1000000000) return "--:--";
     struct tm* t=localtime(&epoch); char buf[10];
-    if(includeSeconds) sprintf(buf,"%02d:%02d:%02d",t->tm_hour,t->tm_min,t->tm_sec);
-    else               sprintf(buf,"%02d:%02d",      t->tm_hour,t->tm_min);
+    if(includeSeconds) snprintf(buf,sizeof(buf),"%02d:%02d:%02d",t->tm_hour,t->tm_min,t->tm_sec);
+    else               snprintf(buf,sizeof(buf),"%02d:%02d",      t->tm_hour,t->tm_min);
     return String(buf);
 }
 
@@ -286,6 +288,27 @@ void test_alertStateLogic() {
     TEST("DHT error (-999) → LOW",      evalTempAlertState(-999.0f, 20.0f, 35.0f) == STATE_ALERT_LOW);
 }
 
+void test_sensorStatusTransition() {
+    SECTION("Sensor Status Transition  (sensor error takes priority over Wi-Fi)");
+
+    TEST("DHT error + Wi-Fi connected -> SENS ERR",
+         tempbotSensorStatusTransition(false, true, true) == TEMPBOT_SENSOR_STATUS_ERROR);
+    TEST("DS18B20 disconnect + Wi-Fi connected -> SENS ERR",
+         tempbotSensorStatusTransition(false, true, true) == TEMPBOT_SENSOR_STATUS_ERROR);
+    TEST("valid reading recovers SENS ERR -> CONNECTED",
+         tempbotSensorStatusTransition(true, true, true) == TEMPBOT_SENSOR_STATUS_CONNECTED);
+    TEST("valid reading while Wi-Fi offline keeps status",
+         tempbotSensorStatusTransition(true, false, true) == TEMPBOT_SENSOR_STATUS_KEEP);
+    TEST("valid reading does not overwrite unrelated status",
+         tempbotSensorStatusTransition(true, true, false) == TEMPBOT_SENSOR_STATUS_KEEP);
+    TEST("DS18B20 disconnected sentinel is invalid",
+         tempbotDs18b20ReadingValid(-127.0f) == false);
+    TEST("DS18B20 value below physical range is invalid",
+         tempbotDs18b20ReadingValid(-55.1f) == false);
+    TEST("DS18B20 -55C boundary is valid",
+         tempbotDs18b20ReadingValid(-55.0f) == true);
+}
+
 void test_configFileSizes() {
     SECTION("Config File Size Thresholds  (ตรวจ binary compat ของ saveConfig/loadConfig)");
 
@@ -318,7 +341,7 @@ void test_configFileSizes() {
 // main
 // ============================================================
 int main() {
-    printf("\033[1mTempBot Firmware — Unit Tests  v1.0.9\033[0m\n");
+    printf("\033[1mTempBot Firmware — Unit Tests  v%s\033[0m\n", FIRMWARE_VERSION);
     printf("========================================\n");
 
     test_isNewerVersion();
@@ -327,6 +350,7 @@ int main() {
     test_getTempCalibrationOffset();
     test_bootNotificationFilter();
     test_alertStateLogic();
+    test_sensorStatusTransition();
     test_configFileSizes();
 
     printf("\n========================================\n");

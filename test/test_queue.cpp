@@ -12,6 +12,7 @@
 #include <map>
 #include <algorithm>
 #include <cctype>
+#include "../TempBot/version.h"
 
 // ============================================================
 // Arduino String stub  (ซ้ำจาก run_tests.cpp แต่ standalone)
@@ -121,8 +122,6 @@ static unsigned long _mock_millis = 0;
 unsigned long millis() { return _mock_millis; }
 
 namespace ESP { inline void wdtFeed(){} }
-struct { int status() const { return 3; } } WiFi; // WL_CONNECTED=3
-#define WL_CONNECTED 3
 
 // ============================================================
 // Globals required by queue functions
@@ -494,7 +493,7 @@ void test_queue_partial_flush_simulation() {
 // main
 // ============================================================
 int main() {
-    printf("\033[1mTempBot Firmware — Offline Queue Tests  v1.0.9\033[0m\n");
+    printf("\033[1mTempBot Firmware — Offline Queue Tests  v%s\033[0m\n", FIRMWARE_VERSION);
     printf("================================================\n");
 
     test_getQueueSize();

@@ -24,6 +24,7 @@
 #include "bitmaps.h"
 #include <ESP8266WebServer.h>
 #include <tempbot_common.h>
+#include <tempbot_sensor_state.h>
 #include <ArduinoJson.h>
 #include "version.h"
 
@@ -390,8 +391,9 @@ bool readSensorData() {
 #else
   sensors.requestTemperatures();
   float t = sensors.getTempCByIndex(0);
-  if (t != DEVICE_DISCONNECTED_C && t > -55.0) t += getTempCalibrationOffset();
-  if (t == DEVICE_DISCONNECTED_C || t < -55.0) {
+  bool sensorReadingValid = tempbotDs18b20ReadingValid(t, DEVICE_DISCONNECTED_C);
+  if (sensorReadingValid) t += getTempCalibrationOffset();
+  if (!sensorReadingValid) {
     currentStatus = "SENS ERR"; failedSyncCount++;
     if (millis() - lastSensorErrorNotifyTime >= 3600000UL) {
       notifyViaGAS("⚠️ [TempBot Alert]\nBoard: " + getBoardIdentifier() + "\nDS18B20 not responding!");
@@ -834,18 +836,28 @@ void loop() {
       Serial.printf("[loop] raw=%.2f offset=%+.2f -> cal=%.2f\n", t, off, t + off);
       t += off;
     }
-    if (isnan(t) || isnan(h)) { currentTemp = -999; currentHumid = -999; }
+    bool sensorReadingValid = !isnan(t) && !isnan(h);
+    if (!sensorReadingValid) { currentTemp = -999; currentHumid = -999; }
     else { currentTemp = t; currentHumid = h; }
-    if (WiFi.status() == WL_CONNECTED && (currentStatus == "RECONNECTING" || currentStatus == "SENS ERR"))
-      currentStatus = "CONNECTED";
+    TempBotSensorStatusTransition transition = tempbotSensorStatusTransition(
+      sensorReadingValid,
+      WiFi.status() == WL_CONNECTED,
+      currentStatus == "RECONNECTING" || currentStatus == "SENS ERR");
+    if (transition == TEMPBOT_SENSOR_STATUS_ERROR) currentStatus = "SENS ERR";
+    else if (transition == TEMPBOT_SENSOR_STATUS_CONNECTED) currentStatus = "CONNECTED";
     updateDisplay(currentTemp, currentHumid, currentStatus);
 #else
     sensors.requestTemperatures();
     float t = sensors.getTempCByIndex(0);
-    if (t != DEVICE_DISCONNECTED_C && t > -55.0) t += getTempCalibrationOffset();
-    currentTemp = (t == DEVICE_DISCONNECTED_C || t < -55.0) ? -999 : t;
-    if (WiFi.status() == WL_CONNECTED && (currentStatus == "RECONNECTING" || currentStatus == "SENS ERR"))
-      currentStatus = "CONNECTED";
+    bool sensorReadingValid = tempbotDs18b20ReadingValid(t, DEVICE_DISCONNECTED_C);
+    if (sensorReadingValid) t += getTempCalibrationOffset();
+    currentTemp = sensorReadingValid ? t : -999;
+    TempBotSensorStatusTransition transition = tempbotSensorStatusTransition(
+      sensorReadingValid,
+      WiFi.status() == WL_CONNECTED,
+      currentStatus == "RECONNECTING" || currentStatus == "SENS ERR");
+    if (transition == TEMPBOT_SENSOR_STATUS_ERROR) currentStatus = "SENS ERR";
+    else if (transition == TEMPBOT_SENSOR_STATUS_CONNECTED) currentStatus = "CONNECTED";
     updateDisplay(currentTemp, currentStatus);
 #endif
     lastUpdate = now;
